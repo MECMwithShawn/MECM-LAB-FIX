@@ -1,8 +1,22 @@
 # MECM Lab Fix
 
-This repository contains utility scripts for the **Windows 11 and Office 365 Deployment Lab Kit**.
+This repository contains utility scripts and troubleshooting documentation for the **Windows 11 and Office 365 Deployment Lab Kit**.
 
 **Lab Link:** [Windows 11 and Office 365 Deployment Lab Kit](https://learn.microsoft.com/en-us/microsoft-365/enterprise/modern-desktop-deployment-and-management-lab?view=o365-worldwide)
+
+>  **Master Reference Guide**: For network topology diagrams, complete error registries, and step-by-step execution orders, see [`LAB_REFERENCE_GUIDE.md`](./LAB_REFERENCE_GUIDE.md).
+
+---
+
+## Quick Reference Summary
+
+| Script Name | Target System | Purpose / Problem Fixed |
+| :--- | :--- | :--- |
+| **[`fix-client-vms.ps1`](./fix-client-vms.ps1)** | **Host PC** | Fixes `0x800705B4` timeout, `0x80070020` file locks, & `0xC03A000E` VHD chain errors on client & gateway VMs. |
+| **[`setup-wifi-nat-switch.ps1`](./setup-wifi-nat-switch.ps1)** | **Host PC** | Fixes work Wi-Fi disconnects by creating an Internal NAT Switch (`192.168.16.0/24`). |
+| **[`fix-cm1-routing.ps1`](./fix-cm1-routing.ps1)** | **CM1 VM** | Fixes slow internet & routing delays on dual-NIC `HYD-CM1`. |
+| **[`disable-guest-updates.ps1`](./disable-guest-updates.ps1)** | **Guest VMs** | Blocks automatic Windows Updates inside guest VMs to preserve lab baseline. |
+| **[`cleanup_lab.ps1`](./cleanup_lab.ps1)** | **Host PC** | Removes all `HYD-*` VMs and switches for a clean reinstallation. |
 
 ---
 
