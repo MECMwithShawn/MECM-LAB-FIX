@@ -35,7 +35,33 @@ powershell -ExecutionPolicy Bypass -File .\fix-client-vms.ps1
 
 ---
 
-## 2. Fix CM1 Routing (`fix-cm1-routing.ps1`)
+## 2. Share Work Wi-Fi with VMs via NAT Switch (`setup-wifi-nat-switch.ps1`)
+
+### Problem
+Creating a Hyper-V **External Virtual Switch** bound to a Wi-Fi adapter (e.g. Killer Wi-Fi 7) causes the host's Wi-Fi connection to drop instantly.
+
+### Why This Happens
+- **Wi-Fi / 802.11 Protocol Restrictions**: Wi-Fi networks allow only **one MAC address per wireless connection**. An External Switch attempts to pass multiple VM MAC addresses through the host Wi-Fi card. Corporate Wi-Fi routers (with 802.1X / MAC filtering) reject this and drop the connection.
+- **Bridge Driver Conflict**: Hyper-V's Virtual Switch bridge filter driver causes wireless card drivers to drop association.
+
+### Solution
+Use an **Internal Virtual Switch + Windows NAT (Network Address Translation)** instead of an External Switch.
+
+The script [`setup-wifi-nat-switch.ps1`](./setup-wifi-nat-switch.ps1):
+- Configures `HYD-InterNet` as an **Internal** Virtual Switch.
+- Assigns IP `192.168.16.1/24` to the host's virtual interface.
+- Configures Windows NAT (`HYD-Lab-NAT`) for subnet `192.168.16.0/24`.
+- **Result**: VMs route through your host's existing Wi-Fi connection using your laptop's authenticated single MAC address. Wi-Fi **never drops**.
+
+### Run
+In an **Administrator PowerShell** session:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup-wifi-nat-switch.ps1
+```
+
+---
+
+## 3. Fix CM1 Routing (`fix-cm1-routing.ps1`)
 
 ### Problem
 The `HYD-CM1` VM has two active NICs:
@@ -60,7 +86,7 @@ powershell -ExecutionPolicy Bypass -File .\fix-cm1-routing.ps1
 
 ---
 
-## 3. Disable Windows Updates in Guest VMs (`disable-guest-updates.ps1`)
+## 4. Disable Windows Updates in Guest VMs (`disable-guest-updates.ps1`)
 
 ### Problem
 In a lab environment managed by MECM / ConfigMgr, guest VMs connected to the internet via the NAT gateway can trigger unwanted automatic Windows Updates. This consumes bandwidth, alters baseline lab configurations, and causes unexpected reboots.
@@ -79,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File .\disable-guest-updates.ps1
 
 ---
 
-## 4. Lab Cleanup (`cleanup_lab.ps1`)
+## 5. Lab Cleanup (`cleanup_lab.ps1`)
 
 If you need to reinstall the lab and want to remove existing VMs and Virtual Switches to avoid conflicts, use [`cleanup_lab.ps1`](./cleanup_lab.ps1).
 
