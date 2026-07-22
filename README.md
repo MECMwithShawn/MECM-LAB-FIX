@@ -60,7 +60,26 @@ powershell -ExecutionPolicy Bypass -File .\fix-cm1-routing.ps1
 
 ---
 
-## 3. Lab Cleanup (`cleanup_lab.ps1`)
+## 3. Disable Windows Updates in Guest VMs (`disable-guest-updates.ps1`)
+
+### Problem
+In a lab environment managed by MECM / ConfigMgr, guest VMs connected to the internet via the NAT gateway can trigger unwanted automatic Windows Updates. This consumes bandwidth, alters baseline lab configurations, and causes unexpected reboots.
+
+### Solution
+The script [`disable-guest-updates.ps1`](./disable-guest-updates.ps1):
+- Configures Group Policy registry keys (`NoAutoUpdate = 1`, `AUOptions = 1`, `DoNotConnectToWindowsUpdateInternetLocations = 1`).
+- Stops and disables `wuauserv` (Windows Update), `usoServ` (Update Orchestrator), `bits`, and `dosvc`.
+- Disables scheduled tasks under `\Microsoft\Windows\UpdateOrchestrator\` and `\Microsoft\Windows\WindowsUpdate\`.
+
+### Run Inside Guest VM
+In an **Administrator PowerShell** session inside the target guest VM:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\disable-guest-updates.ps1
+```
+
+---
+
+## 4. Lab Cleanup (`cleanup_lab.ps1`)
 
 If you need to reinstall the lab and want to remove existing VMs and Virtual Switches to avoid conflicts, use [`cleanup_lab.ps1`](./cleanup_lab.ps1).
 
