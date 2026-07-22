@@ -1,5 +1,5 @@
 # MECM Lab / Hydration Kit Fix Script
-# Resolves Hyper-V error 0x800705B4 (timeout), 0x80070020 (sharing violation), and 0xC03A000E (VHD chain mismatch)
+# Resolves Hyper-V error 0x800705B4 (timeout), 0x80070020 (sharing violation), and dual-NIC internet routing on CM1
 # IMPORTANT: Run this script from an Elevated PowerShell (Admin) session.
 
 Write-Host "--- MECM Lab Fix Started ---" -ForegroundColor Cyan
@@ -25,27 +25,15 @@ foreach ($proc in $vmwpProcesses) {
     }
 }
 
-# 2. Fix HYD-GW1 if chain mismatch or corrupted checkpoint
-$gw1Vhdx = "$labPath\HYD-GW1\Virtual Hard Disks\HYD-GW1.VHDX"
-$serverParent = "$labPath\ServerParent.vhdx"
-
-if (Test-Path $gw1Vhdx) {
-    Set-VHD -Path $gw1Vhdx -ParentPath $serverParent -IgnoreMismatch -ErrorAction SilentlyContinue
-    
-    $gw1Vm = Get-VM -Name "HYD-GW1" -ErrorAction SilentlyContinue
-    if ($gw1Vm -and $gw1Vm.State -ne 'Running') {
-        # Check if GW1 has startup error
-        try {
-            Start-VM -Name "HYD-GW1" -ErrorAction Stop
-        } catch {
-            Write-Host "Re-creating clean HYD-GW1 VM definition..." -ForegroundColor Yellow
-            Remove-VM -Name "HYD-GW1" -Force
-            New-VM -Name "HYD-GW1" -MemoryStartupBytes 2GB -Generation 2 -VHDPath $gw1Vhdx -SwitchName "HYD-CorpNet" | Out-Null
-            Add-VMNetworkAdapter -VMName "HYD-GW1" -Name "External1" -SwitchName "HYD-InterNet" | Out-Null
-            Set-VMMemory -VMName "HYD-GW1" -DynamicMemoryEnabled $true -MinimumBytes 1GB -MaximumBytes 4GB
-            Set-VMProcessor -VMName "HYD-GW1" -Count 2
-            Start-VM -Name "HYD-GW1" -ErrorAction SilentlyContinue
-        }
+# 2. Add direct Internet adapter to HYD-CM1 if missing
+$cm1Vm = Get-VM -Name "HYD-CM1" -ErrorAction SilentlyContinue
+if ($cm1Vm) {
+    $cm1InetAdapter = Get-VMNetworkAdapter -VMName "HYD-CM1" -Name "External1" -ErrorAction SilentlyContinue
+    if (-not $cm1InetAdapter) {
+        Write-Host "Adding secondary Internet adapter (External1) to HYD-CM1 connected to HYD-InterNet..." -ForegroundColor Green
+        Add-VMNetworkAdapter -VMName "HYD-CM1" -Name "External1" -SwitchName "HYD-InterNet" | Out-Null
+    } else {
+        Connect-VMNetworkAdapter -VMName "HYD-CM1" -Name "External1" -SwitchName "HYD-InterNet" | Out-Null
     }
 }
 
