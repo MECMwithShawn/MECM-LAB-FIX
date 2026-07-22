@@ -1,10 +1,23 @@
 # MECM Deployment Lab Kit — Master Reference & Troubleshooting Guide
 
-This reference document provides a complete guide to architecture, network topology, common Hyper-V errors, and fix scripts for the **Windows 11 and M365 Deployment Lab Kit**.
+This reference document provides a complete guide to architecture, network topology, official lab credentials, common Hyper-V errors, and fix scripts for the **Windows 11 and M365 Deployment Lab Kit (25H2)**.
+
+**Lab Guides Location:** [`Win11_25H2_Lab_Guides`](file:///C:/Users/shawn/Downloads/Win11_25H2_Lab_Guides)  
+- `Win11_25H2_SetUpGuide.docx`
+- `Win11_25H2_LabGuide.docx`
 
 ---
 
-## 1. Lab Architecture & Network Topology
+## 1. Official Lab Credentials
+
+| Account Type | Username | Default Password | Notes |
+| :--- | :--- | :--- | :--- |
+| **Domain Administrator** | `CORP\LabAdmin` | `P@ssw0rd` | Full Enterprise Admin across all domain-joined VMs (`HYD-DC1`, `HYD-CM1`, `HYD-CLIENT1`, `HYD-CLIENT2`). |
+| **Local Administrator** | `Administrator` or `.\LabAdmin` | `P@ssw0rd` | Local machine admin on Workgroup VMs (`HYD-CLIENT3`, `HYD-CLIENT4`) & Gateway (`HYD-GW1`). |
+
+---
+
+## 2. Lab Architecture & Network Topology
 
 The lab operates on two distinct network boundaries:
 
@@ -34,7 +47,8 @@ graph TD
     end
 
     NatSwitch <-->|External1 NIC| GW1
-    GW1 <-->|HYD-Corpnet0 NIC| CorpSwitch
+    NatSwitch <-->|External1 NIC (Optional Direct)| CM1
+    CorpSwitch <-->|HYD-Corpnet0 NIC| GW1
     CorpSwitch <--> DC1
     CorpSwitch <--> CM1
     CorpSwitch <--> CLIENT1
@@ -47,12 +61,12 @@ graph TD
 | :--- | :--- | :--- | :--- | :--- |
 | **`HYD-GW1`** | RRAS Router / NAT Gateway | `10.0.0.254` | `192.168.16.1` | `HYD-CorpNet` & `HYD-InterNet` (Internal) |
 | **`HYD-DC1`** | Active Directory & DNS | `10.0.0.6` | `10.0.0.254` | `HYD-CorpNet` |
-| **`HYD-CM1`** | ConfigMgr Primary Site Server | `10.0.0.7` | `10.0.0.254` | `HYD-CorpNet` |
+| **`HYD-CM1`** | ConfigMgr Primary Site Server | `10.0.0.7` | `10.0.0.254` | `HYD-CorpNet` (Optional direct `HYD-InterNet`) |
 | **`HYD-CLIENT1..6`**| Windows 11 Workstations | `10.0.0.100+` | `10.0.0.254` | `HYD-CorpNet` |
 
 ---
 
-## 2. Master Troubleshooting & Fix Registry
+## 3. Master Troubleshooting & Fix Registry
 
 ### Issue 1: Client VM Startup Error (`0x800705B4` Timeout / `0x80070020` File Lock)
 * **Symptom**: Starting client VMs throws `'HYD-CLIENT1' failed to start worker process: This operation returned because the timeout period expired. (0x800705B4)`.
@@ -92,14 +106,14 @@ Set-VHD -Path "C:\Win11_25H2_Lab\HYD-GW1\Virtual Hard Disks\HYD-GW1.VHDX" -Paren
 
 ---
 
-### Issue 4: Dual-NIC CM1 Slow Internet Traffic
-* **Symptom**: `HYD-CM1` internet traffic is sluggish or times out due to competing network interfaces.
-* **Root Cause**: A default route (`0.0.0.0/0`) exists on the private/corp NIC with equal interface metrics to the internet NIC.
-* **Fix Script**: [`fix-cm1-routing.ps1`](./fix-cm1-routing.ps1)
-* **Action**: Removes default route from private NIC (`Ethernet`) and sets metric `10` on `Ethernet 2` (internet) vs `500` on `Ethernet` (corp).
+### Issue 4: Dual-NIC CM1 Internet & Routing Setup
+* **Symptom**: `HYD-CM1` internet traffic is sluggish or DNS fails.
+* **Root Cause**: `HYD-CM1` requires secondary NIC (`Ethernet 2`) bound to `HYD-InterNet` with static IP `192.168.16.7` and gateway `192.168.16.1`.
+* **Fix Script**: [`configure-cm1-internet.ps1`](./configure-cm1-internet.ps1)
+* **Action**: Sets metric `10` on `Ethernet 2` (internet) vs `500` on `Ethernet` (corp) with `8.8.8.8` DNS fallback.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\fix-cm1-routing.ps1
+powershell -ExecutionPolicy Bypass -File .\configure-cm1-internet.ps1
 ```
 
 ---
@@ -127,12 +141,12 @@ powershell -ExecutionPolicy Bypass -File .\cleanup_lab.ps1
 
 ---
 
-## 3. Quick-Start Execution Order
+## 4. Quick-Start Execution Order
 
 For a fresh setup on a Wi-Fi connected laptop:
 
 1. **Clean Reinstall (if needed)**: Run `cleanup_lab.ps1` -> Run `C:\MECM Lab\setup.exe`.
 2. **Setup Wi-Fi NAT**: Run `setup-wifi-nat-switch.ps1`.
 3. **Fix Client VMs**: Run `fix-client-vms.ps1`.
-4. **Fix CM1 Routing**: Run `fix-cm1-routing.ps1` on CM1.
+4. **Configure CM1 Internet**: Run `configure-cm1-internet.ps1` on CM1.
 5. **Disable Guest Auto-Updates**: Run `disable-guest-updates.ps1` on guest VMs.
