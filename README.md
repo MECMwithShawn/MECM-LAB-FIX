@@ -14,6 +14,8 @@ When starting client VMs (`HYD-CLIENT1` through `HYD-Client6`) after setup or re
 > **An error occurred while attempting to start the selected virtual machine(s).**  
 > `'HYD-CLIENT1' failed to start worker process: This operation returned because the timeout period expired. (0x800705B4).`
 
+![Hyper-V Error Screenshot](./hyperv-error-0x800705B4.png)
+
 ### Cause
 1. **Orphaned Worker Processes & File Locks (`0x80070020`)**: Previous failed startup attempts or setup routines leave background `vmwp.exe` worker processes running. These processes maintain open file locks on `WindowsParent.vhdx` and client differencing disks in `C:\Win11_25H2_Lab`.
 2. **Corrupted Guest State (`.vmgs`)**: Stale runtime state files in `C:\ProgramData\Microsoft\Windows\Hyper-V` cause Hyper-V initialization to hang until the 30-second timeout.
