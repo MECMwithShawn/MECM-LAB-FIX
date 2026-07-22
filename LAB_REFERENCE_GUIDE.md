@@ -110,7 +110,7 @@ Set-VHD -Path "C:\Win11_25H2_Lab\HYD-GW1\Virtual Hard Disks\HYD-GW1.VHDX" -Paren
 * **Symptom**: `HYD-CM1` internet traffic is sluggish or DNS fails.
 * **Root Cause**: `HYD-CM1` requires secondary NIC (`Ethernet 2`) bound to `HYD-InterNet` with static IP `192.168.16.7` and gateway `192.168.16.1`.
 * **Fix Script**: [`configure-cm1-internet.ps1`](./configure-cm1-internet.ps1)
-* **Action**: Sets metric `10` on `Ethernet 2` (internet) vs `500` on `Ethernet` (corp) with `8.8.8.8` DNS fallback.
+* **Action**: Sets metric `10` on `Ethernet 2` (internet) vs `500` on `Ethernet` (corp). DNS is set to the host network's resolvers (see Issue 7).
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\configure-cm1-internet.ps1
@@ -141,12 +141,38 @@ powershell -ExecutionPolicy Bypass -File .\cleanup_lab.ps1
 
 ---
 
+### Issue 7: Corporate Wi-Fi Blocks Public DNS Resolvers
+* **Symptom**: VMs can `ping 8.8.8.8` successfully but `nslookup google.com` fails. Websites show "server IP address could not be found" despite raw IP connectivity working.
+* **Root Cause**: Many corporate Wi-Fi networks (including Cloudflare Gateway networks) **block DNS queries to public resolvers** like `8.8.8.8` and `1.1.1.1`. All DNS is forced through the network's own resolvers.
+* **How to Detect**: On the **host**, run `Get-DnsClientServerAddress` and look at the Wi-Fi adapter's DNS servers. If they're NOT `8.8.8.8`/`1.1.1.1` (e.g. `172.64.36.1`, `172.64.36.2`), public DNS is likely blocked.
+* **Fix**: Use the host's Wi-Fi DNS servers inside VMs and as DC1 DNS Forwarders:
+
+```powershell
+# 1. Check host Wi-Fi DNS (run on host)
+Get-DnsClientServerAddress -InterfaceAlias "Wi-Fi" -AddressFamily IPv4
+
+# 2. Set DC1 DNS Forwarders to match (run via PowerShell Direct to DC1)
+$sec = ConvertTo-SecureString "P@ssw0rd" -AsPlainText -Force
+$cred = New-Object System.Management.Automation.PSCredential ("corp.contoso.com\LabAdmin", $sec)
+Invoke-Command -VMName "HYD-DC1" -Credential $cred -ScriptBlock {
+    Set-DnsServerForwarder -IPAddress "172.64.36.1","172.64.36.2" -Force
+}
+
+# 3. Set VM internet NIC DNS (run inside each VM)
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet 2" -ServerAddresses ("172.64.36.1","172.64.36.2")
+```
+
+> **⚠️ Network-Specific**: If the laptop moves to a different network (home, hotspot), these resolvers may stop working. Re-check the host Wi-Fi DNS and update accordingly. Pointing VM internet NICs at DC1 (`10.0.0.6`) centralizes this to one place to fix (DC1's forwarders).
+
+---
+
 ## 4. Quick-Start Execution Order
 
 For a fresh setup on a Wi-Fi connected laptop:
 
-1. **Clean Reinstall (if needed)**: Run `cleanup_lab.ps1` -> Run `C:\MECM Lab\setup.exe`.
+1. **Clean Reinstall (if needed)**: Run `cleanup_lab.ps1` → Run `C:\MECM Lab\setup.exe`.
 2. **Setup Wi-Fi NAT**: Run `setup-wifi-nat-switch.ps1`.
 3. **Fix Client VMs**: Run `fix-client-vms.ps1`.
 4. **Configure CM1 Internet**: Run `configure-cm1-internet.ps1` on CM1.
-5. **Disable Guest Auto-Updates**: Run `disable-guest-updates.ps1` on guest VMs.
+5. **Check DNS resolvers**: Run `Get-DnsClientServerAddress` on host Wi-Fi — update VM DNS and DC1 forwarders to match (see Issue 7).
+6. **Disable Guest Auto-Updates**: Run `disable-guest-updates.ps1` on guest VMs.
