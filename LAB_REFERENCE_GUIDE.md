@@ -166,6 +166,22 @@ Set-DnsClientServerAddress -InterfaceAlias "Ethernet 2" -ServerAddresses ("172.6
 
 ---
 
+### Issue 8: Work Guest Wi-Fi DHCP Outage / Captive Portal Failure
+* **Symptom**: Connecting to `wifi-xguest` leaves adapter in `169.254.x.x` (APIPA), no captive portal page pops up, and no internet access is available.
+* **Root Cause**: Corporate guest DHCP server is unresponsive or exhausted, preventing IP assignment and portal redirection.
+* **Fix Scripts**: [`apply-wifi-guest-static.ps1`](./apply-wifi-guest-static.ps1) & [`revert-wifi-dhcp.ps1`](./revert-wifi-dhcp.ps1)
+* **Action**: Sets verified static IP `100.88.63.244/23`, gateway `100.88.62.1`, and resolvers `172.64.36.1`/`172.64.36.2`, then triggers captive portal URLs. When done, revert back to DHCP using `revert-wifi-dhcp.ps1`.
+
+```powershell
+# Apply static workaround and open portal
+powershell -ExecutionPolicy Bypass -File .\apply-wifi-guest-static.ps1
+
+# Revert to automatic DHCP when moving networks
+powershell -ExecutionPolicy Bypass -File .\revert-wifi-dhcp.ps1
+```
+
+---
+
 ## 4. Quick-Start Execution Order
 
 For a fresh setup on a Wi-Fi connected laptop:

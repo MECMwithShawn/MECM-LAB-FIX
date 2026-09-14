@@ -16,8 +16,9 @@ This repository contains utility scripts and troubleshooting documentation for t
 | **[`setup-wifi-nat-switch.ps1`](./setup-wifi-nat-switch.ps1)** | **Host PC** | Fixes work Wi-Fi disconnects by creating an Internal NAT Switch (`192.168.16.0/24`). |
 | **[`configure-cm1-internet.ps1`](./configure-cm1-internet.ps1)** | **CM1 VM** | Configures CM1 dual-NIC with static IPs, metrics, and network-appropriate DNS. |
 | **[`fix-cm1-routing.ps1`](./fix-cm1-routing.ps1)** | **CM1 VM** | Fixes slow internet & routing delays on dual-NIC `HYD-CM1`. |
-| **[`disable-guest-updates.ps1`](./disable-guest-updates.ps1)** | **Guest VMs** | Blocks automatic Windows Updates inside guest VMs to preserve lab baseline. |
 | **[`cleanup_lab.ps1`](./cleanup_lab.ps1)** | **Host PC** | Removes all `HYD-*` VMs and switches for a clean reinstallation. |
+| **[`apply-wifi-guest-static.ps1`](./apply-wifi-guest-static.ps1)** | **Host PC** | Configures static IP/gateway for `wifi-xguest` when DHCP is down & triggers captive portal. |
+| **[`revert-wifi-dhcp.ps1`](./revert-wifi-dhcp.ps1)** | **Host PC** | Reverts host Wi-Fi adapter back to automatic dynamic IP (DHCP) & resets DNS. |
 
 ---
 
@@ -129,3 +130,24 @@ In an **Administrator PowerShell** session:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\cleanup_lab.ps1
 ```
+
+---
+
+## 6. Work Wi-Fi Guest Portal & DHCP Workaround (`apply-wifi-guest-static.ps1` & `revert-wifi-dhcp.ps1`)
+
+### Problem
+When connecting to `wifi-xguest`, DHCP services can fail or time out, leaving the host adapter with a non-functional `169.254.x.x` APIPA address and preventing the captive login portal from launching.
+
+### Solution
+- **[`apply-wifi-guest-static.ps1`](./apply-wifi-guest-static.ps1)**: Applies verified working static IP configuration (`100.88.63.244/23`, Gateway `100.88.62.1`, DNS `172.64.36.1`, `172.64.36.2`) and automatically triggers the captive portal in the default browser.
+- **[`revert-wifi-dhcp.ps1`](./revert-wifi-dhcp.ps1)**: Reverts the host Wi-Fi adapter back to dynamic automatic DHCP and resets DNS settings when switching back to other networks.
+
+### Run
+In an **Administrator PowerShell** session:
+```powershell
+# To apply static guest Wi-Fi config and launch portal
+powershell -ExecutionPolicy Bypass -File .\apply-wifi-guest-static.ps1
+
+# To revert back to DHCP
+powershell -ExecutionPolicy Bypass -File .\revert-wifi-dhcp.ps1
+```
