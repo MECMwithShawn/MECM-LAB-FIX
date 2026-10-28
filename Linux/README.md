@@ -115,7 +115,19 @@ sg libvirt -c "python3 Linux/tools/vmexec.py HYD-DC1 'Get-DhcpServerv4Lease -Sco
 
 Clients: run `D:\virtio-win-guest-tools.exe` once in each when you use it.
 
-### 6. Optional: pause Windows Update lab-wide
+### 6. Guest integration GPO (recommended)
+
+On DC1: `D:\new-guest-integration-gpo.ps1` (or through the agent:
+`sg libvirt -c "python3 Linux/tools/vmexec.py HYD-DC1" < Linux/guest/new-guest-integration-gpo.ps1`).
+It creates and links the domain GPO **Lab - VM guest integration**:
+- **Power button = Shut down**, also allowed from the sign-in/lock screen. Without this, the
+  Windows 11 clients ignore the virtual power button, so a safe shutdown from Lab Manager
+  did nothing on VMs without the guest agent.
+- **Startup script** that installs the virtio-win guest tools from the lab CD on any VM
+  missing the QEMU guest agent. Each client gets the agent (reliable safe shutdown, clipboard,
+  auto-resize) on its next start.
+
+### 7. Optional: pause Windows Update lab-wide
 
 On DC1: `D:\new-update-gpo.ps1` (or through the agent:
 `sg libvirt -c "python3 Linux/tools/vmexec.py HYD-DC1" < Linux/guest/new-update-gpo.ps1`).
@@ -182,6 +194,7 @@ Linux/vm/checkpoint.sh list   HYD-CLIENT4
 | GW1 loops into Windows recovery; no crash screen | With VMX visible, Windows starts its own hypervisor, which triple-faults under KVM | VMX is hidden in every VM (`make-vms.py`) |
 | Static IPs gone after the move | Hyper-V synthetic NICs became new e1000e adapters | `guest/fix-network.ps1`; fixed MACs tell CorpNet from InterNet NICs |
 | GW1 NAT dead | RRAS NAT was bound to the old adapter IDs | `fix-network.ps1` rebinds `Ethernet 2` (public) and `Ethernet` (private) |
+| Safe shutdown does nothing on the clients | No guest agent, and Windows 11 ignored the ACPI power button (libvirt sent it; the VM stayed at the lock screen) | `guest/new-guest-integration-gpo.ps1`: power button = Shut down + shutdown without logon, and a startup script that installs the guest tools. Tested on CLIENT3: agent up in 35 s after restart, then safe shutdown took 4 s |
 | Servers power off about hourly | Server 2025 evaluation expired | `slmgr /rearm` in `server-finish.ps1` (one rearm left in the 25H2 kit; it's now 0) |
 | VM display doesn't resize with the window | `vga` has fixed modes; the virtio GPU driver on Windows only offers its own mode list (DC1 stuck at 2048×1536); virt-manager's auto-resize was off | **QXL** graphics in `make-vms.py`: the SPICE agent sets the exact window size through its driver (`qxldod`, from the guest tools). Plus `resize-guest 1`; reopen the console window afterwards. Changing the graphics model needs a full power-off, not a Windows restart |
 | New ISO not visible in Windows | Swapping media in place doesn't signal a change | Eject, then insert (see `build-iso.sh`) |
