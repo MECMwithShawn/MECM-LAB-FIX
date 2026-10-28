@@ -2,7 +2,8 @@
 """Lab Manager: a Windows 11-style window for the hydration lab VMs (libvirt qemu:///system).
 
 Main window: VM cards with role, status, live CPU graph and Start / Shut down / Restart /
-Force off / Checkpoints / Connect. "Start lab" boots DC1 -> GW1 -> CM1 -> CLIENT1-4 in order.
+Force off / Checkpoints / Connect. "Start lab" boots DC1 -> GW1 -> CM1 -> CLIENT1-4 in order,
+shows its progress, can be cancelled, and skips any VM you start or stop yourself meanwhile.
 Console: a slim header (VM name, Ctrl+Alt+Del, power, full screen) over the SPICE display,
 which resizes the guest to the window (needs QXL graphics + the SPICE agent in the guest).
 
@@ -341,7 +342,7 @@ class VmRow(Gtk.Box):
         if state == libvirt.VIR_DOMAIN_RUNNING:
             now = time.monotonic_ns()
             if self.last:
-                pct = (cpu_time - self.last[0]) / max(1, (now - self.last[1]) * vcpus) * 100
+                pct = min(100.0, (cpu_time - self.last[0]) / max(1, (now - self.last[1]) * vcpus) * 100)
                 self.spark.push(pct)
                 self.cpu_label.set_text(f'{pct:4.0f}% CPU · {mem_gb:g} GB')
             self.last = (cpu_time, now)
@@ -354,7 +355,7 @@ class VmRow(Gtk.Box):
 
     def toggle_power(self):
         if self.running:
-            self.app.act(self.name, 'Shutting down', self.dom.shutdown)
+            self.app.shutdown(self.name)
         else:
             self.app.act(self.name, 'Starting', self.dom.create)
 
@@ -362,7 +363,7 @@ class VmRow(Gtk.Box):
         off = self.state == libvirt.VIR_DOMAIN_SHUTOFF
         items = [
             ('Start', lambda: self.app.act(self.name, 'Starting', self.dom.create), off),
-            ('Shut down', lambda: self.app.act(self.name, 'Shutting down', self.dom.shutdown), self.running),
+            ('Shut down', lambda: self.app.shutdown(self.name), self.running),
             ('Restart', lambda: self.app.act(self.name, 'Restarting', lambda: self.dom.reboot(0)), self.running),
             ('Turn off (force)', self.force_off, not off),
             None,
@@ -616,7 +617,7 @@ class Console(Gtk.Window):
         running = state == libvirt.VIR_DOMAIN_RUNNING
         popover_menu(widget, [
             ('Start', self.start_vm, state == libvirt.VIR_DOMAIN_SHUTOFF),
-            ('Shut down', lambda: self.app.act(self.name, 'Shutting down', self.dom.shutdown, toaster=self.toast), running),
+            ('Shut down', lambda: self.app.shutdown(self.name, toaster=self.toast), running),
             ('Restart', lambda: self.app.act(self.name, 'Restarting', lambda: self.dom.reboot(0), toaster=self.toast), running),
         ]).popup()
 
@@ -656,6 +657,7 @@ class LabManager:
         self.consoles = {}
         self.window = None
         self.rows = {}
+        self.lab_run = None  # while Start lab runs: {'cancel': Event, 'touched': set, 'status': str}
 
     # -- main window ------------------------------------------------------
     def build_main(self):
@@ -704,11 +706,14 @@ class LabManager:
         for row in self.rows.values():
             row.refresh()
         running = sum(1 for r in self.rows.values() if r.running)
-        self.header.set_subtitle(f'corp.contoso.com · {running} of {len(self.rows)} running')
+        run = self.lab_run
+        self.header.set_subtitle(run['status'] if run else f'corp.contoso.com · {running} of {len(self.rows)} running')
         return True
 
     # -- shared -----------------------------------------------------------
     def act(self, name, verb, fn, toaster=None):
+        if self.lab_run:
+            self.lab_run['touched'].add(name)
         toaster = toaster or self.toast
         toaster.show(f'{verb} {name.replace("HYD-", "")}…', 3)
 
@@ -717,16 +722,47 @@ class LabManager:
                 toaster.show(f'{name.replace("HYD-", "")}: {err}', 6)
         run_bg(fn, done)
 
+    def shutdown(self, name, toaster=None):
+        """Ask the guest to shut down: guest agent if it has one, else the ACPI power button.
+        Windows ignores the power button while it's still booting, so check back later."""
+        toaster = toaster or self.toast
+        dom = self.conn.lookupByName(name)
+        flags = libvirt.VIR_DOMAIN_SHUTDOWN_GUEST_AGENT | libvirt.VIR_DOMAIN_SHUTDOWN_ACPI_POWER_BTN
+        self.act(name, 'Shutting down', lambda: dom.shutdownFlags(flags), toaster=toaster)
+
+        def check():
+            try:
+                if dom.info()[0] == libvirt.VIR_DOMAIN_RUNNING:
+                    toaster.show(f'{name.replace("HYD-", "")} is still running. Windows ignores shut down while it\'s '
+                                 'starting up or busy; try again, or use Turn off (force).', 8)
+            except libvirt.libvirtError:
+                pass
+            return False
+        GLib.timeout_add_seconds(90, check)
+
     def start_lab(self):
-        self.start_lab_btn.set_sensitive(False)
+        if self.lab_run:
+            self.lab_run['cancel'].set()
+            self.lab_run['status'] = 'Cancelling Start lab…'
+            self.start_lab_btn.set_sensitive(False)
+            self.tick()
+            return
+        run = self.lab_run = {'cancel': threading.Event(), 'touched': set(), 'status': 'Starting lab…'}
+        self.start_lab_btn.set_label('Cancel')
         doms = {d.name(): d for d in self.conn.listAllDomains()}
+        order = [n for n in START_ORDER if n in doms]
+
+        def wait(seconds):
+            return run['cancel'].wait(seconds)  # True when cancelled
 
         def work():
-            for n in START_ORDER:
-                d = doms.get(n)
-                if d is None or d.info()[0] == libvirt.VIR_DOMAIN_RUNNING:
-                    continue
-                GLib.idle_add(self.toast.show, f'Starting {n.replace("HYD-", "")}…', 3)
+            for i, n in enumerate(order, 1):
+                if run['cancel'].is_set():
+                    return 'cancelled'
+                d = doms[n]
+                if n in run['touched'] or d.info()[0] != libvirt.VIR_DOMAIN_SHUTOFF:
+                    continue  # already up, or you started/stopped it yourself during the run
+                run['status'] = f'Start lab: starting {n.replace("HYD-", "")} · {i} of {len(order)}'
                 d.create()
                 if n in ('HYD-DC1', 'HYD-GW1'):  # later VMs need these answering on the network
                     deadline = time.time() + 240
@@ -735,13 +771,19 @@ class LabManager:
                             self.conn.lookupByName(n).qemuAgentCommand('{"execute":"guest-ping"}', 3, 0)
                             break
                         except libvirt.libvirtError:
-                            time.sleep(4)
-                else:
-                    time.sleep(8)
+                            if wait(4):
+                                return 'cancelled'
+                elif wait(8):
+                    return 'cancelled'
+            return 'done'
 
-        def done(_res, err):
+        def done(res, err):
+            self.lab_run = None
+            self.start_lab_btn.set_label('Start lab')
             self.start_lab_btn.set_sensitive(True)
-            self.toast.show(f'Start lab: {err}' if err else 'Lab started', 5)
+            self.toast.show(f'Start lab: {err}' if err else
+                            'Start lab cancelled' if res == 'cancelled' else 'Lab started', 5)
+            self.tick()
         run_bg(work, done)
 
     def open_console(self, name):
