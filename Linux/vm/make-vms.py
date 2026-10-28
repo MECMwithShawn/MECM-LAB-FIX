@@ -7,7 +7,7 @@ HERE = os.environ.get('LAB', os.path.expanduser('~/vms/m365-lab'))
 # name: (memory GiB, vCPUs, networks, boot order)
 VMS = {
     'HYD-DC1': (4, 2, ['HYD-CorpNet'], ['hd']),
-    'HYD-GW1': (4, 2, ['HYD-CorpNet', 'HYD-InterNet'], ['hd']),
+    'HYD-GW1': (2, 2, ['HYD-CorpNet', 'HYD-InterNet'], ['hd']),
     'HYD-CM1': (12, 4, ['HYD-CorpNet', 'HYD-InterNet'], ['hd']),
     'HYD-CLIENT1': (4, 2, ['HYD-CorpNet'], ['hd']),
     'HYD-CLIENT2': (4, 2, ['HYD-CorpNet'], ['hd']),
