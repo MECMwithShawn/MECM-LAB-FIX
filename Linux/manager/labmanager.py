@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Lab Manager: a Windows 11-style window for the hydration lab VMs (libvirt qemu:///system).
 
-Main window: VM cards with role, status, guest tools state, live CPU graph, Connect, Checkpoints,
-and VMware-style power options: safe Shut down / Restart (through Windows) and hard Power off /
-Reset (like the physical buttons, confirmed first). "Start lab" boots DC1 -> GW1 -> CM1 -> CLIENT1-4 in order,
+Main window, two views:
+- List: VM cards with role, status, guest tools state, live CPU graph, Connect, Checkpoints, and
+  VMware-style power options: safe Shut down / Restart (through Windows) and hard Power off / Reset
+  (like the physical buttons, confirmed first).
+- Consoles: live previews of every VM from libvirt screenshots, which don't take the VM's one SPICE
+  viewer slot; click one to open its console.
+"Start lab" boots DC1 -> GW1 -> CM1 -> CLIENT1-4 in order,
 shows its progress, can be cancelled, and skips any VM you start or stop yourself meanwhile.
 Console: a slim header (VM name, Ctrl+Alt+Del, resolution, power, full screen) over the SPICE
 display. Resolution "Auto" resizes the guest to the window; a fixed size is scaled to fit. Both need
@@ -141,6 +145,12 @@ popover separator { background-color: rgba(255,255,255,0.08); }
 .placeholder-title { color: #ffffff; font-size: 18px; font-weight: 600; }
 button.res { font-feature-settings: "tnum"; }
 .menu-item.checked .menu-title { color: #60cdff; font-weight: 600; }
+.tile { background: #2b2b2b; border-radius: 8px; border: 1px solid rgba(255,255,255,0.06); padding: 8px; }
+.tile:hover { background: #333333; border-color: rgba(96,205,255,0.45); }
+.tile-screen { background: #111111; border-radius: 5px; }
+.tile-name { font-weight: 600; font-size: 13px; color: #ffffff; }
+.tile-off { color: #8a8a8a; font-size: 12px; }
+stackswitcher button { padding: 2px 14px; min-height: 26px; }
 .fs-bar { background: rgba(32,32,32,0.92); border-radius: 0 0 8px 8px; padding: 4px 8px; }
 """
 
@@ -872,6 +882,150 @@ class Console(Gtk.Window):
         self.app.maybe_quit()
 
 
+class ConsoleGrid(Gtk.ScrolledWindow):
+    """Live previews of every VM. Pictures come from libvirt screenshots (not SPICE), so they
+    never take a VM's single viewer slot; click a tile to open its console."""
+    TILE_W, TILE_H = 352, 220
+    INTERVAL = 3  # seconds between refreshes, only while this view is showing
+
+    def __init__(self, app, names):
+        super().__init__(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        self.app = app
+        self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
+                                max_children_per_line=4, min_children_per_line=1,
+                                column_spacing=10, row_spacing=10, margin=16, valign=Gtk.Align.START)
+        self.add(self.flow)
+        self.tiles = {}
+        for n in names:
+            self.tiles[n] = self._tile(n)
+            self.flow.add(self.tiles[n]['root'])
+        self.active = False
+        self._stop = threading.Event()
+        threading.Thread(target=self._worker, daemon=True).start()
+
+    def _tile(self, name):
+        kind = LAB.get(name, ('client',))[0]
+        ev = Gtk.EventBox()
+        ev.set_tooltip_text(f'Open the {name.replace("HYD-", "")} console')
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.get_style_context().add_class('tile')
+        screen = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
+        screen.set_size_request(self.TILE_W, self.TILE_H)
+        screen.get_style_context().add_class('tile-screen')
+        image = Gtk.Image()
+        screen.add_named(image, 'live')
+        asleep = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+        asleep_label = Gtk.Label(label='Screen asleep')
+        asleep_label.get_style_context().add_class('tile-off')
+        asleep.pack_start(asleep_label, False, False, 0)
+        wake = text_button('Wake', 'subtle', lambda: self.wake(name))
+        wake.set_tooltip_text('Press Shift in the VM to turn its screen back on')
+        wake.set_halign(Gtk.Align.CENTER)
+        asleep.pack_start(wake, False, False, 0)
+        screen.add_named(asleep, 'asleep')
+        off = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+        off.pack_start(Gtk.Image.new_from_pixbuf(tile_pixbuf(kind, False)), False, False, 0)
+        off_label = Gtk.Label()
+        off_label.get_style_context().add_class('tile-off')
+        off.pack_start(off_label, False, False, 0)
+        start = text_button('Start', 'accent', lambda: self.app.act(name, 'Starting', self.app.conn.lookupByName(name).create))
+        start.set_halign(Gtk.Align.CENTER)
+        off.pack_start(start, False, False, 0)
+        screen.add_named(off, 'off')
+        bottom = Gtk.Box(spacing=8)
+        label = Gtk.Label(label=name.replace('HYD-', ''), xalign=0)
+        label.get_style_context().add_class('tile-name')
+        pill = Gtk.Label()
+        pill.get_style_context().add_class('pill')
+        pill.set_valign(Gtk.Align.CENTER)
+        bottom.pack_start(label, False, False, 0)
+        bottom.pack_start(pill, False, False, 0)
+        bottom.pack_end(text_button('Connect', 'subtle', lambda: self.app.open_console(name)), False, False, 0)
+        box.pack_start(screen, False, False, 0)
+        box.pack_start(bottom, False, False, 0)
+        ev.add(box)
+        ev.connect('button-release-event', lambda _w, e: e.button == 1 and self.app.open_console(name))
+        return {'root': ev, 'screen': screen, 'image': image, 'off_label': off_label, 'start': start,
+                'pill': pill, 'state': None}
+
+    def refresh_states(self):
+        """Pills and off placeholders, from the list view's cached states (no extra libvirt calls)."""
+        for name, t in self.tiles.items():
+            row = self.app.rows.get(name)
+            state = row.state if row else None
+            if state == t['state']:
+                continue
+            t['state'] = state
+            text, cls = STATE_TEXT.get(state, ('Unknown', 'off'))
+            ctx = t['pill'].get_style_context()
+            for c in ('running', 'off', 'busy', 'paused', 'error'):
+                ctx.remove_class(c)
+            ctx.add_class(cls)
+            t['pill'].set_text(text)
+            if state == libvirt.VIR_DOMAIN_RUNNING:
+                if t['image'].get_pixbuf() is not None:
+                    t['screen'].set_visible_child_name('live')
+            else:
+                t['off_label'].set_text(f'{text}')
+                t['start'].set_visible(state == libvirt.VIR_DOMAIN_SHUTOFF)
+                t['screen'].set_visible_child_name('off')
+                t['image'].clear()
+
+    def _worker(self):
+        conn = None
+        while not self._stop.is_set():
+            if self.active:
+                try:
+                    conn = conn or libvirt.open(URI)
+                    for name in list(self.tiles):
+                        dom = conn.lookupByName(name)
+                        if dom.info()[0] != libvirt.VIR_DOMAIN_RUNNING:
+                            continue
+                        data = self._screenshot(conn, dom)
+                        GLib.idle_add(self._show, name, data)
+                except libvirt.libvirtError:
+                    conn = None  # reconnect next round
+            self._stop.wait(self.INTERVAL)
+
+    @staticmethod
+    def _screenshot(conn, dom):
+        stream = conn.newStream(0)
+        dom.screenshot(stream, 0, 0)
+        buf = bytearray()
+        stream.recvAll(lambda _st, data, b: b.extend(data) or 0, buf)
+        stream.finish()
+        return bytes(buf)
+
+    def _show(self, name, data):
+        t = self.tiles.get(name)
+        if t is None or t['state'] != libvirt.VIR_DOMAIN_RUNNING:
+            return False
+        try:
+            loader = GdkPixbuf.PixbufLoader()
+            loader.write(data)
+            loader.close()
+            pix = loader.get_pixbuf()
+        except GLib.Error:
+            return False
+        scale = min(self.TILE_W / pix.get_width(), self.TILE_H / pix.get_height())
+        small = pix.scale_simple(max(1, int(pix.get_width() * scale)), max(1, int(pix.get_height() * scale)),
+                                 GdkPixbuf.InterpType.BILINEAR)
+        t['image'].set_from_pixbuf(small)
+        # Windows turns the display off when idle: an all-black frame. Say so instead of a black box.
+        pixels = small.get_pixels()
+        blank = max(pixels[::97]) < 12
+        t['screen'].set_visible_child_name('asleep' if blank else 'live')
+        return False
+
+    def wake(self, name):
+        dom = self.app.conn.lookupByName(name)
+        # Left Shift (Linux keycode 42): harmless, and enough to wake the guest's display
+        self.app.act(name, 'Waking', lambda: dom.sendKey(libvirt.VIR_KEYCODE_SET_LINUX, 0, [42], 1, 0))
+
+    def stop(self):
+        self._stop.set()
+
+
 class LabManager:
     def __init__(self, gapp=None):
         self.gapp = gapp  # Gtk.Application when run normally; None in tests driven by Gtk.main()
@@ -892,6 +1046,10 @@ class LabManager:
         self.start_lab_btn = text_button('Start lab', 'accent', self.start_lab)
         self.start_lab_btn.set_tooltip_text('Start DC1, GW1, CM1, then CLIENT1–4, each after the previous is up')
         hb.pack_start(self.start_lab_btn)
+        self.view_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
+        switcher = Gtk.StackSwitcher(stack=self.view_stack)
+        switcher.set_valign(Gtk.Align.CENTER)
+        hb.pack_start(switcher)
         hb.pack_end(icon_button('preferences-system-symbolic', 'Open virt-manager (advanced settings)',
                                 lambda: subprocess.Popen(['virt-manager', '--connect', URI])))
         win.set_titlebar(hb)
@@ -914,21 +1072,43 @@ class LabManager:
                 self.rows[n] = row
                 body.pack_start(row, False, False, 0)
         sw.add(body)
-        overlay.add(sw)
+        self.grid = ConsoleGrid(self, names)
+        self.view_stack.add_titled(sw, 'list', 'List')
+        self.view_stack.add_titled(self.grid, 'consoles', 'Consoles')
+        self.view_stack.connect('notify::visible-child-name', self.on_view_changed)
+        overlay.add(self.view_stack)
         win.add(overlay)
-        win.connect('destroy', lambda *_: (setattr(self, 'window', None), self.maybe_quit()))
+        win.connect('destroy', lambda *_: (self.grid.stop(), setattr(self, 'window', None), self.maybe_quit()))
         self.window = win
         if self.gapp:
             self.gapp.add_window(win)
         GLib.timeout_add(2000, self.tick)
         self.tick()
         win.show_all()
+        if load_settings().get('view') == 'consoles':
+            win.set_default_size(1180, 820)
+            win.resize(1180, 820)
+            self.view_stack.set_visible_child_name('consoles')
+
+    def on_view_changed(self, *_):
+        view = self.view_stack.get_visible_child_name()
+        self.grid.active = view == 'consoles'
+        if self.grid.active:
+            self.grid.refresh_states()
+            w, h = self.window.get_size()
+            if w < 1100:  # room for three previews side by side
+                self.window.resize(1180, max(h, 820))
+        data = load_settings()
+        data['view'] = view
+        save_settings(data)
 
     def tick(self):
         if self.window is None:
             return False
         for row in self.rows.values():
             row.refresh()
+        if self.grid.active:
+            self.grid.refresh_states()
         running = sum(1 for r in self.rows.values() if r.running)
         run = self.lab_run
         subtitle = run['status'] if run else f'corp.contoso.com · {running} of {len(self.rows)} running'

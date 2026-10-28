@@ -159,6 +159,12 @@ A cleaner front end than virt-manager for this lab:
   Safe actions go through the guest agent when the VM has guest tools, else the virtual power
   button. Windows ignores the power button while it's still starting up, so if the VM is still
   running 90 seconds after Shut down you get a message suggesting to try again or use Power off.
+- **Consoles view** (the **List | Consoles** switch in the header): live previews of every VM,
+  refreshed every 3 seconds while the view is showing. Click a preview (or **Connect**) to open its
+  console; off VMs have **Start**. When Windows has turned its screen off for being idle, the tile
+  says **Screen asleep** with a **Wake** button (sends Shift). Previews come from libvirt
+  screenshots, not SPICE, so they don't take a VM's one viewer slot: an open console keeps working.
+  The app remembers which view you used last.
 - **Console:** a slim header (VM name, role, Ctrl+Alt+Del, resolution, power, full screen) over
   the VM. The resolution button offers **Auto** (Windows follows the window size) or a fixed
   1280×720 … 2560×1440: the window resizes to fit that size, like Hyper-V's console, or fills the
