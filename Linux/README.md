@@ -48,6 +48,7 @@ Work Wi-Fi (only the laptop's own MAC)          laptop
 sudo apt install -y libvirt-daemon-system virt-manager swtpm swtpm-tools genisoimage ntfs-3g
 sudo usermod -aG libvirt,kvm $USER          # then log out and back in
 setfacl -m u:libvirt-qemu:x $HOME           # let QEMU reach disks under your home
+gsettings set org.virt-manager.virt-manager.console resize-guest 1   # VM display follows the window
 ```
 
 ### 2. Get the Hyper-V disks
@@ -134,6 +135,7 @@ Linux/vm/checkpoint.sh list   HYD-CLIENT4
 | Static IPs gone after the move | Hyper-V synthetic NICs became new e1000e adapters | `guest/fix-network.ps1`; fixed MACs tell CorpNet from InterNet NICs |
 | GW1 NAT dead | RRAS NAT was bound to the old adapter IDs | `fix-network.ps1` rebinds `Ethernet 2` (public) and `Ethernet` (private) |
 | Servers power off about hourly | Server 2025 evaluation expired | `slmgr /rearm` in `server-finish.ps1` (one rearm left in the 25H2 kit; it's now 0) |
+| VM display doesn't resize with the window | The basic `vga` model has fixed modes, and virt-manager's auto-resize was off | virtio GPU in `make-vms.py` (driver comes with the guest tools) + `resize-guest 1`; reopen the console window afterwards |
 | New ISO not visible in Windows | Swapping media in place doesn't signal a change | Eject, then insert (see `build-iso.sh`) |
 | `virsh` permission denied right after `usermod` | Group membership applies at next login | Log out and back in, or prefix commands with `sg libvirt -c` |
 
