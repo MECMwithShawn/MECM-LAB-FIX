@@ -1,5 +1,11 @@
 # Running the lab on Linux (KVM / libvirt)
 
+[![MECM Lab reference sheet](docs/lab-reference.png)](docs/lab-reference.png)
+
+*Lab reference sheet: site, SQL, roles, folders, network and health findings, with values read from
+the VMs on 28 Oct 2026. Source: [`docs/lab-reference.html`](docs/lab-reference.html); re-render
+with [`tools/render-html.py`](tools/render-html.py).*
+
 The **Windows 11 and M365 Deployment Lab Kit (25H2)** ships as Hyper-V VMs. This folder moves an
 already-provisioned Hyper-V lab onto a Linux host (tested on Zorin OS 18.1 / Ubuntu 24.04 base, QEMU 8.2,
 libvirt 10) and keeps it working on a Wi-Fi-only laptop, the same goals as the [Windows](../Windows) fixes.
@@ -14,6 +20,7 @@ All 9 VMs run: DC1, GW1, CM1, CLIENT1–4, and the blank CLIENT5/6 for PXE/OSD.
 | [`vm/`](./vm) | `define-lab.sh` creates the networks and VMs; `make-vms.py` holds the VM specs; `checkpoint.sh` gives Hyper-V-style checkpoints |
 | [`guest/`](./guest) | Scripts that run **inside** Windows, delivered on a CD (`lab-fixup.iso`) built by `build-iso.sh` |
 | [`manager/`](./manager) | **Lab Manager**: a Windows 11-style app to start, stop and connect to the VMs (`install.sh` adds it to the apps menu) |
+| [`docs/`](./docs) | Lab reference sheet (PNG + editable HTML) |
 | [`tools/`](./tools) | `vmexec.py` runs PowerShell in a VM with no sign-in; `vmtype.py` types into a VM; `shot.sh` screenshots; `peek.sh` reads a VM's offline IP config |
 
 Everything works on `$LAB` (default `~/vms/m365-lab`), which holds `src/`, `disks/`, `xml/` and the ISO.
