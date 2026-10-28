@@ -543,6 +543,8 @@ class Console(Gtk.Window):
         self.set_default_size(1280, 800)
         self.set_icon_name('computer')
         self.session = self.display = self.main = None
+        self.qxl = False          # live graphics model can change mode (QXL); others ignore requests
+        self.guest_size = None    # the guest's current screen size, from the display channel
         self.auto_connect = True  # off after we lose a connection, so two viewers don't keep kicking each other
         self.is_fullscreen = False
         self.resolution = load_settings().get('resolution', {}).get(self.name)  # None = Auto, else [w, h]
@@ -601,6 +603,7 @@ class Console(Gtk.Window):
 
         self.connect('destroy', self.on_destroy)
         self.connect('window-state-event', self.on_window_state)
+        self.connect('notify::scale-factor', self.on_scale_factor)
         self._poll = GLib.timeout_add(1000, self.tick)
         self.show_all()
         self.ph_reconnect.hide()
@@ -652,6 +655,8 @@ class Console(Gtk.Window):
         self.ph_title.set_text('Connecting…')
         self.ph_text.set_text('')
         self.ph_start.hide()
+        video = ET.fromstring(self.dom.XMLDesc(0)).find('./devices/video/model')
+        self.qxl = video is not None and video.get('type') == 'qxl'
         self.session = SpiceClientGLib.Session()
         self.session.set_property('uri', uri)
         self.session.set_property('enable-audio', False)
@@ -666,18 +671,38 @@ class Console(Gtk.Window):
             GObject.GObject.connect(channel, 'channel-event', self.on_main_event)
             GObject.GObject.connect(channel, 'notify::agent-connected', lambda *_: GLib.idle_add(self.on_agent))
         if isinstance(channel, SpiceClientGLib.DisplayChannel) and self.display is None:
-            cid = channel.get_property('channel-id')
-            self.display = SpiceClientGtk.Display.new(self.session, cid)
-            self.display.set_property('resize-guest', self.resolution is None)
-            self.display.set_property('scaling', True)
-            self.display.set_property('grab-keyboard', True)
-            self.display.set_property('grab-mouse', False)
-            self.display.show()
-            self.stack.add_named(self.display, 'display')
-            self.stack.set_visible_child_name('display')
-            self.display.grab_focus()
+            GObject.GObject.connect(channel, 'display-primary-create',
+                                    lambda _c, _fmt, w, h, *_rest: setattr(self, 'guest_size', (w, h)))
+            self.display_channel_id = channel.get_property('channel-id')
+            self.make_display()
 
-    def on_main_event(self, _channel, event):
+    def make_display(self):
+        self.display = SpiceClientGtk.Display.new(self.session, self.display_channel_id)
+        self.display.set_property('resize-guest', self.resolution is None)
+        self.display.set_property('scaling', True)
+        self.display.set_property('grab-keyboard', True)
+        self.display.set_property('grab-mouse', False)
+        self.display.show()
+        self.stack.add_named(self.display, 'display')
+        self.stack.set_visible_child_name('display')
+        self.display.grab_focus()
+
+    def on_scale_factor(self, *_):
+        """Moving between monitors with different scaling (laptop 150% -> Dell 100%) changes the
+        window's scale factor; the SPICE widget keeps drawing for the old one (half size in the
+        corner). Reconnect: a fresh widget on the old connection stays black until the guest
+        redraws, while a new connection always gets the full picture."""
+        if self.session is None:
+            return
+        self.close_session()
+        self.ph_title.set_text('Connecting…')
+        self.stack.set_visible_child_name('placeholder')
+        # give the server a moment to drop the old connection before linking the new one
+        GLib.timeout_add(600, lambda: (self.session is None and self.open_session(), False)[1])
+
+    def on_main_event(self, channel, event):
+        if channel is not self.main:
+            return  # a connection we already replaced or closed; its late events don't matter
         if event in (SpiceClientGLib.ChannelEvent.CLOSED, SpiceClientGLib.ChannelEvent.ERROR_CONNECT,
                      SpiceClientGLib.ChannelEvent.ERROR_IO, SpiceClientGLib.ChannelEvent.ERROR_LINK):
             GLib.idle_add(self.lost_connection)
@@ -711,14 +736,21 @@ class Console(Gtk.Window):
         # Only touch the widgets when something changed: re-setting them every tick re-lays out
         # the header, which resizes the display and makes Windows re-apply its mode (blinking).
         label = 'Auto' if self.resolution is None else '{}×{}'.format(*self.resolution)
-        ready = self.agent_ready()
-        if (label, ready) == getattr(self, '_res_shown', None):
+        if self.display is None:
+            why = 'Connect to the VM first'
+        elif not self.qxl:
+            why = ("This VM is still on the old graphics card, which can't change resolution. "
+                   'Shut it down fully and start it again (a restart inside Windows isn\'t enough).')
+        elif not self.agent_ready():
+            why = 'Needs the guest tools (SPICE agent) running in this VM: run D:\\virtio-win-guest-tools.exe'
+        else:
+            why = None
+        if (label, why) == getattr(self, '_res_shown', None):
             return
-        self._res_shown = (label, ready)
+        self._res_shown = (label, why)
         self.res_btn.set_label(label)
-        self.res_btn.set_sensitive(ready)
-        self.res_btn.set_tooltip_text('Display resolution' if ready else
-                                      'Needs the guest tools (SPICE agent) running in this VM')
+        self.res_btn.set_sensitive(why is None)
+        self.res_btn.set_tooltip_text(why or 'Display resolution')
 
     def on_agent(self):
         self.update_res_button()
@@ -746,8 +778,8 @@ class Console(Gtk.Window):
 
     def apply_resolution(self):
         """Auto: let the display widget size the guest to the window. Fixed: ask the guest's
-        SPICE agent for that mode and scale the picture to the window."""
-        if not (self.display and self.agent_ready()):
+        SPICE agent for that mode and size the window to fit it, like Hyper-V's console."""
+        if not (self.display and self.qxl and self.agent_ready()):
             return
         if self.resolution is None:
             self.display.set_property('resize-guest', True)
@@ -756,12 +788,35 @@ class Console(Gtk.Window):
         else:
             self.display.set_property('resize-guest', False)
             w, h = self.resolution
+            self.fit_window(w, h)
+            GLib.timeout_add_seconds(6, self.check_mode, (w, h))
         self.main.update_display_enabled(0, True, False)
         self.main.update_display(0, 0, 0, w, h, False)
         self.main.send_monitor_config()
 
+    def fit_window(self, w, h):
+        """Resize the window so the VM shows at w x h, or as large as fits the screen (scaled)."""
+        if self.is_fullscreen:
+            return  # full screen stays full screen; the picture is scaled
+        gdk_win = self.get_window()
+        if gdk_win is None:
+            return
+        area = Gdk.Display.get_default().get_monitor_at_window(gdk_win).get_workarea()
+        header = self.get_titlebar().get_allocated_height()
+        scale = min(1.0, (area.width - 32) / w, (area.height - header - 48) / h)
+        self.unmaximize()
+        self.resize(int(w * scale), int(h * scale) + header)
+
+    def check_mode(self, wanted):
+        if self.display and self.resolution == list(wanted) and self.guest_size != wanted:
+            got = '{}×{}'.format(*self.guest_size) if self.guest_size else 'its old size'
+            self.toast.show(f"Windows stayed at {got} instead of {wanted[0]}×{wanted[1]}. It may not offer that "
+                            'mode yet; try another size, or sign in and try again.', 8)
+        return False
+
     def close_session(self):
         self.main = None
+        self.guest_size = None
         if self.display:
             self.stack.remove(self.display)
             self.display.destroy()
