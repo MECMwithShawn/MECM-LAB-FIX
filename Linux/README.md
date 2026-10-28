@@ -148,7 +148,9 @@ A cleaner front end than virt-manager for this lab:
   to release the keyboard.
 
 It uses the same SPICE display widget as virt-manager. A VM accepts one viewer at a time, so
-opening it in Lab Manager disconnects a virt-manager console showing the same VM. Run one VM's
+opening it in Lab Manager disconnects a virt-manager console showing the same VM. If another viewer
+takes over, the console shows **Disconnected** with a **Reconnect** button rather than fighting it.
+Lab Manager runs as a single instance: launching it again brings the open window to the front. Run one VM's
 console directly with `labmanager.py --console HYD-DC1`.
 
 ## Checkpoints (the lab guide's "Revert HYD-CLIENT4 to the latest checkpoint")

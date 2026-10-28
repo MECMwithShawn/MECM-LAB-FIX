@@ -29,10 +29,11 @@ gi.require_version('Gdk', '3.0')
 gi.require_version('SpiceClientGtk', '3.0')
 gi.require_version('SpiceClientGLib', '2.0')
 gi.require_version('GdkPixbuf', '2.0')
-from gi.repository import Gdk, GdkPixbuf, GLib, GObject, Gtk, Pango, SpiceClientGLib, SpiceClientGtk  # noqa: E402
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, GObject, Gtk, Pango, SpiceClientGLib, SpiceClientGtk  # noqa: E402
 import libvirt  # noqa: E402
 
 URI = 'qemu:///system'
+APP_ID = 'io.github.mecmwithshawn.LabManager'
 ACCENT = (0.376, 0.804, 1.0)  # #60CDFF, the Windows 11 dark-mode accent
 
 # name: (kind, role, addresses)
@@ -542,6 +543,7 @@ class Console(Gtk.Window):
         self.set_default_size(1280, 800)
         self.set_icon_name('computer')
         self.session = self.display = self.main = None
+        self.auto_connect = True  # off after we lose a connection, so two viewers don't keep kicking each other
         self.is_fullscreen = False
         self.resolution = load_settings().get('resolution', {}).get(self.name)  # None = Auto, else [w, h]
 
@@ -577,7 +579,9 @@ class Console(Gtk.Window):
         self.ph_text.get_style_context().add_class('placeholder')
         self.ph_start = text_button('Start', 'accent', self.start_vm)
         self.ph_start.set_halign(Gtk.Align.CENTER)
-        for w in (self.ph_title, self.ph_text, self.ph_start):
+        self.ph_reconnect = text_button('Reconnect', 'accent', self.reconnect)
+        self.ph_reconnect.set_halign(Gtk.Align.CENTER)
+        for w in (self.ph_title, self.ph_text, self.ph_start, self.ph_reconnect):
             ph.pack_start(w, False, False, 0)
         self.stack.add_named(ph, 'placeholder')
 
@@ -599,6 +603,7 @@ class Console(Gtk.Window):
         self.connect('window-state-event', self.on_window_state)
         self._poll = GLib.timeout_add(1000, self.tick)
         self.show_all()
+        self.ph_reconnect.hide()
         self.tick()
 
     # -- connection -------------------------------------------------------
@@ -617,11 +622,15 @@ class Console(Gtk.Window):
         except libvirt.libvirtError:
             return True
         running = state == libvirt.VIR_DOMAIN_RUNNING
-        self.cad.set_sensitive(running and self.display is not None)
+        cad = running and self.display is not None
+        if self.cad.get_sensitive() != cad:
+            self.cad.set_sensitive(cad)
         self.update_res_button()
-        if running and self.session is None:
+        if running and self.session is None and self.auto_connect:
             self.open_session()
         elif not running:
+            self.auto_connect = True  # connect by itself once it's started again
+            self.ph_reconnect.hide()
             if self.session:
                 self.close_session()
             text, _ = STATE_TEXT.get(state, ('Off', 'off'))
@@ -671,16 +680,42 @@ class Console(Gtk.Window):
     def on_main_event(self, _channel, event):
         if event in (SpiceClientGLib.ChannelEvent.CLOSED, SpiceClientGLib.ChannelEvent.ERROR_CONNECT,
                      SpiceClientGLib.ChannelEvent.ERROR_IO, SpiceClientGLib.ChannelEvent.ERROR_LINK):
-            GLib.idle_add(self.close_session)
+            GLib.idle_add(self.lost_connection)
+
+    def lost_connection(self):
+        self.close_session()
+        try:
+            running = self.dom.info()[0] == libvirt.VIR_DOMAIN_RUNNING
+        except libvirt.libvirtError:
+            running = False
+        if running:  # still up: most likely another viewer took over; don't fight it
+            self.auto_connect = False
+            self.ph_title.set_text('Disconnected')
+            self.ph_text.set_text(f'Another viewer (virt-manager or another Lab Manager window) may have taken over '
+                                  f'{self.name.replace("HYD-", "")}.\nA VM can only be shown in one window at a time.')
+            self.ph_start.hide()
+            self.ph_reconnect.show()
+            self.stack.set_visible_child_name('placeholder')
+        return False
+
+    def reconnect(self):
+        self.ph_reconnect.hide()
+        self.auto_connect = True
+        self.open_session()
 
     # -- resolution ---------------------------------------------------------
     def agent_ready(self):
         return bool(self.main and self.main.get_property('agent-connected'))
 
     def update_res_button(self):
+        # Only touch the widgets when something changed: re-setting them every tick re-lays out
+        # the header, which resizes the display and makes Windows re-apply its mode (blinking).
         label = 'Auto' if self.resolution is None else '{}×{}'.format(*self.resolution)
-        self.res_btn.set_label(label)
         ready = self.agent_ready()
+        if (label, ready) == getattr(self, '_res_shown', None):
+            return
+        self._res_shown = (label, ready)
+        self.res_btn.set_label(label)
         self.res_btn.set_sensitive(ready)
         self.res_btn.set_tooltip_text('Display resolution' if ready else
                                       'Needs the guest tools (SPICE agent) running in this VM')
@@ -783,7 +818,8 @@ class Console(Gtk.Window):
 
 
 class LabManager:
-    def __init__(self):
+    def __init__(self, gapp=None):
+        self.gapp = gapp  # Gtk.Application when run normally; None in tests driven by Gtk.main()
         self.conn = connect()
         self.consoles = {}
         self.window = None
@@ -827,6 +863,8 @@ class LabManager:
         win.add(overlay)
         win.connect('destroy', lambda *_: (setattr(self, 'window', None), self.maybe_quit()))
         self.window = win
+        if self.gapp:
+            self.gapp.add_window(win)
         GLib.timeout_add(2000, self.tick)
         self.tick()
         win.show_all()
@@ -838,7 +876,9 @@ class LabManager:
             row.refresh()
         running = sum(1 for r in self.rows.values() if r.running)
         run = self.lab_run
-        self.header.set_subtitle(run['status'] if run else f'corp.contoso.com · {running} of {len(self.rows)} running')
+        subtitle = run['status'] if run else f'corp.contoso.com · {running} of {len(self.rows)} running'
+        if self.header.get_subtitle() != subtitle:
+            self.header.set_subtitle(subtitle)
         return True
 
     # -- shared -----------------------------------------------------------
@@ -969,9 +1009,12 @@ class LabManager:
             self.consoles[name].present()
             return
         self.consoles[name] = Console(self, self.conn.lookupByName(name))
+        if self.gapp:
+            self.gapp.add_window(self.consoles[name])
 
     def maybe_quit(self):
-        if self.window is None and not self.consoles:
+        # With Gtk.Application the app ends by itself when its last window closes.
+        if self.gapp is None and self.window is None and not self.consoles:
             Gtk.main_quit()
 
 
@@ -984,12 +1027,26 @@ def main():
     provider.load_from_data(CSS)
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), provider,
                                              Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-    app = LabManager()
-    if len(sys.argv) == 3 and sys.argv[1] == '--console':
-        app.open_console(sys.argv[2])
-    else:
-        app.build_main()
-    Gtk.main()
+    # One instance per user: launching again hands the arguments to the running copy, so two
+    # consoles never fight over the same VM.
+    gapp = Gtk.Application(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+    state = {}
+
+    def command_line(_gapp, cmdline):
+        args = cmdline.get_arguments()[1:]
+        if 'app' not in state:
+            state['app'] = LabManager(gapp)
+        app = state['app']
+        if len(args) == 2 and args[0] == '--console':
+            app.open_console(args[1])
+        elif app.window is None:
+            app.build_main()
+        else:
+            app.window.present()
+        return 0
+
+    gapp.connect('command-line', command_line)
+    sys.exit(gapp.run(sys.argv))
 
 
 if __name__ == '__main__':
