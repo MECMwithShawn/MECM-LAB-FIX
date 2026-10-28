@@ -124,13 +124,22 @@ Linux/manager/install.sh          # adds "Lab Manager" to the apps menu
 
 A cleaner front end than virt-manager for this lab:
 - **Main window:** servers and clients as cards with role, addresses, status and a live CPU
-  graph. Each card has Start / Shut down, Connect, and a menu with Restart, Turn off (force),
-  Checkpoints… and Open in virt-manager. **Start lab** boots DC1 → GW1 → CM1 → CLIENT1–4, waiting
+  graph, plus whether the VM's guest tools (QEMU guest agent) are connected. Each card has a
+  power button, Connect, and a menu with the power options, Checkpoints… and Open in virt-manager. **Start lab** boots DC1 → GW1 → CM1 → CLIENT1–4, waiting
   for DC1 and GW1 to answer before starting the rest. While it runs, the header shows its progress
   and the button becomes **Cancel**; any VM you start or shut down yourself meanwhile is skipped.
-- **Shut down** uses the guest agent when the VM has one, else the virtual power button. Windows
-  ignores the power button while it's still starting up, so if the VM is still running 90 seconds
-  later you get a message suggesting to try again or use Turn off (force).
+- **Power options, VMware style** (power button on a card, or in the console header):
+
+  | | Option | Does |
+  | :--- | :--- | :--- |
+  | Safe | **Shut down** | Windows shuts down cleanly (VMware *Shut Down Guest*) |
+  | Safe | **Restart** | Windows restarts itself (*Restart Guest*) |
+  | Hard | **Power off** | Cuts power instantly, unsaved work lost (*Power Off*); asks first |
+  | Hard | **Reset** | Instant reboot without shutting down (*Reset*); asks first |
+
+  Safe actions go through the guest agent when the VM has guest tools, else the virtual power
+  button. Windows ignores the power button while it's still starting up, so if the VM is still
+  running 90 seconds after Shut down you get a message suggesting to try again or use Power off.
 - **Console:** a slim header (VM name, role, Ctrl+Alt+Del, power, full screen) over the VM, which
   resizes to the window. In full screen, touch the top edge for the same controls. Press Ctrl+Alt
   to release the keyboard.
