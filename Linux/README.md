@@ -142,9 +142,12 @@ A cleaner front end than virt-manager for this lab:
   running 90 seconds after Shut down you get a message suggesting to try again or use Power off.
 - **Console:** a slim header (VM name, role, Ctrl+Alt+Del, resolution, power, full screen) over
   the VM. The resolution button offers **Auto** (Windows follows the window size) or a fixed
-  1280×720 … 2560×1440, which is scaled to fit the window. The choice is remembered per VM in
+  1280×720 … 2560×1440: the window resizes to fit that size, like Hyper-V's console, or fills the
+  screen and scales the picture if the size is bigger than your monitor. The choice is remembered per VM in
   `~/.config/lab-manager/settings.json`. It needs the guest tools (SPICE agent) and QXL graphics,
-  so it's greyed out on VMs without them. In full screen, touch the top edge for the same controls. Press Ctrl+Alt
+  so it's greyed out on VMs without them; its tooltip says which is missing. Moving the window
+  between monitors with different scaling (e.g. laptop at 150% and an external screen at 100%)
+  reconnects the console once so the picture is redrawn at the right size. In full screen, touch the top edge for the same controls. Press Ctrl+Alt
   to release the keyboard.
 
 It uses the same SPICE display widget as virt-manager. A VM accepts one viewer at a time, so
