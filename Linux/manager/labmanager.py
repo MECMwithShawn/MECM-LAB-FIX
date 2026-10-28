@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Lab Manager: a Windows 11-style window for the hydration lab VMs (libvirt qemu:///system).
 
-Main window: VM cards with role, status, live CPU graph and Start / Shut down / Restart /
-Force off / Checkpoints / Connect. "Start lab" boots DC1 -> GW1 -> CM1 -> CLIENT1-4 in order,
+Main window: VM cards with role, status, guest tools state, live CPU graph, Connect, Checkpoints,
+and VMware-style power options: safe Shut down / Restart (through Windows) and hard Power off /
+Reset (like the physical buttons, confirmed first). "Start lab" boots DC1 -> GW1 -> CM1 -> CLIENT1-4 in order,
 shows its progress, can be cancelled, and skips any VM you start or stop yourself meanwhile.
 Console: a slim header (VM name, Ctrl+Alt+Del, power, full screen) over the SPICE display,
 which resizes the guest to the window (needs QXL graphics + the SPICE agent in the guest).
@@ -94,7 +95,20 @@ button.subtle {
     box-shadow: none; border-radius: 6px; padding: 4px 12px; min-height: 28px;
 }
 button.subtle:hover { background: rgba(255,255,255,0.10); }
-.menu-item { padding: 6px 12px; border-radius: 4px; }
+popover.background {
+    background-color: #2c2c2c; color: #f2f2f2; border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+}
+popover separator { background-color: rgba(255,255,255,0.08); }
+.menu-item { padding: 6px 10px; border-radius: 4px; min-width: 230px; }
+.menu-item:hover { background: rgba(255,255,255,0.08); }
+.menu-title { font-size: 13px; color: #f2f2f2; }
+.menu-item:disabled .menu-title { color: rgba(255,255,255,0.35); }
+.menu-desc { font-size: 11px; color: #9a9a9a; }
+.menu-item:disabled .menu-desc { color: rgba(255,255,255,0.25); }
+.menu-header { font-size: 11px; font-weight: 600; color: #8a8a8a; margin: 6px 10px 2px 10px; }
+.tools-on { font-size: 11px; color: #60cdff; }
+.tools-off { font-size: 11px; color: #8a8a8a; }
 .toast {
     background: #2d2d2d; color: #f2f2f2; border-radius: 8px; padding: 10px 16px;
     border: 1px solid rgba(255,255,255,0.08); margin: 16px;
@@ -176,15 +190,31 @@ def text_button(label, style, cb=None):
 
 
 def popover_menu(relative_to, items):
-    """items: list of (label, callback, sensitive) or None for a separator."""
+    """items: (label, callback, sensitive[, description]), ('header', text), or None for a separator."""
     pop = Gtk.Popover.new(relative_to)
-    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, margin=6, spacing=2)
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, margin=6, spacing=1)
     for item in items:
         if item is None:
             box.pack_start(Gtk.Separator(margin_top=4, margin_bottom=4), False, False, 0)
             continue
-        label, cb, sensitive = item
-        b = Gtk.ModelButton(text=label)
+        if item[0] == 'header':
+            h = Gtk.Label(label=item[1], xalign=0)
+            h.get_style_context().add_class('menu-header')
+            box.pack_start(h, False, False, 0)
+            continue
+        label, cb, sensitive = item[:3]
+        desc = item[3] if len(item) > 3 else None
+        b = Gtk.Button(relief=Gtk.ReliefStyle.NONE)
+        b.get_style_context().add_class('menu-item')
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        t = Gtk.Label(label=label, xalign=0)
+        t.get_style_context().add_class('menu-title')
+        inner.pack_start(t, False, False, 0)
+        if desc:
+            d = Gtk.Label(label=desc, xalign=0)
+            d.get_style_context().add_class('menu-desc')
+            inner.pack_start(d, False, False, 0)
+        b.add(inner)
         b.set_sensitive(sensitive)
         b.connect('clicked', lambda _b, c=cb: (pop.popdown(), c()))
         box.pack_start(b, False, False, 0)
@@ -294,9 +324,13 @@ class VmRow(Gtk.Box):
         top.pack_start(self.pill, False, False, 0)
         r = Gtk.Label(label=role, xalign=0, ellipsize=Pango.EllipsizeMode.END)
         r.get_style_context().add_class('vm-role')
+        bottom = Gtk.Box(spacing=8)
         a = Gtk.Label(label=addr, xalign=0)
         a.get_style_context().add_class('vm-addr')
-        for wdg in (top, r, a):
+        self.tools = Gtk.Label(xalign=0)
+        bottom.pack_start(a, False, False, 0)
+        bottom.pack_start(self.tools, False, False, 0)
+        for wdg in (top, r, bottom):
             text.pack_start(wdg, False, False, 0)
         self.pack_start(text, True, True, 0)
 
@@ -315,7 +349,27 @@ class VmRow(Gtk.Box):
         for wdg in (self.power, self.connect_btn, self.more):
             self.pack_start(wdg, False, False, 0)
         self.state = None
+        self.agent = None
+        self._xml_tick = 0
         self.refresh()
+
+    def refresh_tools(self):
+        """Guest tools = the QEMU guest agent channel libvirt reports as connected."""
+        try:
+            root = ET.fromstring(self.dom.XMLDesc(0))
+            t = root.find("./devices/channel/target[@name='org.qemu.guest_agent.0']")
+            agent = t is not None and t.get('state') == 'connected'
+        except (libvirt.libvirtError, ET.ParseError):
+            return
+        self.agent = agent
+        ctx = self.tools.get_style_context()
+        ctx.remove_class('tools-on')
+        ctx.remove_class('tools-off')
+        if not self.running:
+            self.tools.set_text('')
+            return
+        ctx.add_class('tools-on' if agent else 'tools-off')
+        self.tools.set_text('· Guest tools connected' if agent else '· No guest tools: safe shutdown uses the power button')
 
     def refresh(self):
         try:
@@ -331,13 +385,18 @@ class VmRow(Gtk.Box):
             self.pill.set_text(text)
             running = state == libvirt.VIR_DOMAIN_RUNNING
             set_icon(self.power, 'system-shutdown-symbolic' if running else 'media-playback-start-symbolic')
+            self.power.set_tooltip_text('Power options' if running else 'Start')
             self.icon.set_from_pixbuf(tile_pixbuf(self.kind, running))
             self.spark.set_opacity(1.0 if running else 0.0)
-            self.power.set_tooltip_text('Shut down' if running else 'Start')
             self.state = state
             if not running:
                 self.spark.clear()
                 self.last = None
+            self._xml_tick = 0
+        self._xml_tick -= 1
+        if self._xml_tick <= 0:  # every ~10 s, and right after a state change
+            self.refresh_tools()
+            self._xml_tick = 5
         mem_gb = mem / 1048576
         if state == libvirt.VIR_DOMAIN_RUNNING:
             now = time.monotonic_ns()
@@ -354,33 +413,19 @@ class VmRow(Gtk.Box):
         return self.state == libvirt.VIR_DOMAIN_RUNNING
 
     def toggle_power(self):
-        if self.running:
-            self.app.shutdown(self.name)
-        else:
+        if self.state == libvirt.VIR_DOMAIN_SHUTOFF:
             self.app.act(self.name, 'Starting', self.dom.create)
+        else:
+            popover_menu(self.power, self.app.power_items(self.name, self.app.window)).popup()
 
     def show_menu(self):
-        off = self.state == libvirt.VIR_DOMAIN_SHUTOFF
-        items = [
-            ('Start', lambda: self.app.act(self.name, 'Starting', self.dom.create), off),
-            ('Shut down', lambda: self.app.shutdown(self.name), self.running),
-            ('Restart', lambda: self.app.act(self.name, 'Restarting', lambda: self.dom.reboot(0)), self.running),
-            ('Turn off (force)', self.force_off, not off),
+        items = self.app.power_items(self.name, self.app.window) + [
             None,
             ('Checkpoints…', lambda: CheckpointDialog(self.app.window, self.dom, self.state).run_dialog(), True),
             ('Open in virt-manager', lambda: subprocess.Popen(
                 ['virt-manager', '--connect', URI, '--show-domain-console', self.name]), True),
         ]
         popover_menu(self.more, items).popup()
-
-    def force_off(self):
-        dlg = Gtk.MessageDialog(transient_for=self.app.window, modal=True,
-                                message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.OK_CANCEL,
-                                text=f'Turn off {self.name} without shutting down?')
-        dlg.format_secondary_text('Like pulling the plug: unsaved work in the VM is lost.')
-        if dlg.run() == Gtk.ResponseType.OK:
-            self.app.act(self.name, 'Turning off', self.dom.destroy)
-        dlg.destroy()
 
 
 class CheckpointDialog(Gtk.Dialog):
@@ -614,12 +659,7 @@ class Console(Gtk.Window):
             state = self.dom.info()[0]
         except libvirt.libvirtError:
             return
-        running = state == libvirt.VIR_DOMAIN_RUNNING
-        popover_menu(widget, [
-            ('Start', self.start_vm, state == libvirt.VIR_DOMAIN_SHUTOFF),
-            ('Shut down', lambda: self.app.shutdown(self.name, toaster=self.toast), running),
-            ('Restart', lambda: self.app.act(self.name, 'Restarting', lambda: self.dom.reboot(0), toaster=self.toast), running),
-        ]).popup()
+        popover_menu(widget, self.app.power_items(self.name, self, toaster=self.toast, state=state)).popup()
 
     def toggle_fullscreen(self):
         if self.is_fullscreen:
@@ -722,23 +762,70 @@ class LabManager:
                 toaster.show(f'{name.replace("HYD-", "")}: {err}', 6)
         run_bg(fn, done)
 
-    def shutdown(self, name, toaster=None):
-        """Ask the guest to shut down: guest agent if it has one, else the ACPI power button.
-        Windows ignores the power button while it's still booting, so check back later."""
-        toaster = toaster or self.toast
+    def power_items(self, name, parent, toaster=None, state=None):
+        """The power menu, VMware style: safe actions go through Windows, hard ones don't."""
         dom = self.conn.lookupByName(name)
-        flags = libvirt.VIR_DOMAIN_SHUTDOWN_GUEST_AGENT | libvirt.VIR_DOMAIN_SHUTDOWN_ACPI_POWER_BTN
-        self.act(name, 'Shutting down', lambda: dom.shutdownFlags(flags), toaster=toaster)
+        if state is None:
+            try:
+                state = dom.info()[0]
+            except libvirt.libvirtError:
+                state = libvirt.VIR_DOMAIN_NOSTATE
+        off = state == libvirt.VIR_DOMAIN_SHUTOFF
+        running = state == libvirt.VIR_DOMAIN_RUNNING
+        if off:
+            return [('Start', lambda: self.act(name, 'Starting', dom.create, toaster=toaster), True, 'Power on the VM')]
+        return [
+            ('header', 'Safe — Windows shuts down cleanly'),
+            ('Shut down', lambda: self.shutdown(name, toaster), running, 'Saves work, closes apps, then powers off'),
+            ('Restart', lambda: self.restart(name, toaster), running, 'Windows restarts itself'),
+            None,
+            ('header', 'Hard — like the physical buttons'),
+            ('Power off', lambda: self.hard(name, parent, toaster, 'off'), True, 'Cuts power instantly; unsaved work is lost'),
+            ('Reset', lambda: self.hard(name, parent, toaster, 'reset'), running, 'Instant reboot without shutting down'),
+        ]
 
+    SAFE_FLAGS = libvirt.VIR_DOMAIN_SHUTDOWN_GUEST_AGENT | libvirt.VIR_DOMAIN_SHUTDOWN_ACPI_POWER_BTN
+
+    def shutdown(self, name, toaster=None):
+        """Safe shut down: through the guest agent if the VM has one, else the ACPI power button.
+        Windows ignores the power button while it's still booting, so check back later."""
+        dom = self.conn.lookupByName(name)
+        self.act(name, 'Shutting down', lambda: dom.shutdownFlags(self.SAFE_FLAGS), toaster=toaster)
+        self._still_running_hint(dom, name, toaster or self.toast, 'shut down')
+
+    def restart(self, name, toaster=None):
+        dom = self.conn.lookupByName(name)
+        self.act(name, 'Restarting', lambda: dom.reboot(self.SAFE_FLAGS), toaster=toaster)
+
+    def _still_running_hint(self, dom, name, toaster, what):
         def check():
             try:
                 if dom.info()[0] == libvirt.VIR_DOMAIN_RUNNING:
-                    toaster.show(f'{name.replace("HYD-", "")} is still running. Windows ignores shut down while it\'s '
-                                 'starting up or busy; try again, or use Turn off (force).', 8)
+                    toaster.show(f'{name.replace("HYD-", "")} is still running. Windows ignores {what} while it\'s '
+                                 'starting up or busy; try again, or use Power off.', 8)
             except libvirt.libvirtError:
                 pass
             return False
         GLib.timeout_add_seconds(90, check)
+
+    def hard(self, name, parent, toaster, kind):
+        short = name.replace('HYD-', '')
+        text, verb, fn = {
+            'off': (f'Power off {short}?', 'Powering off', lambda d: d.destroy()),
+            'reset': (f'Reset {short}?', 'Resetting', lambda d: d.reset(0)),
+        }[kind]
+        dlg = Gtk.MessageDialog(transient_for=parent, modal=True, message_type=Gtk.MessageType.WARNING,
+                                buttons=Gtk.ButtonsType.NONE, text=text)
+        dlg.format_secondary_text('Like pressing the physical button: Windows doesn\'t get to shut down, and '
+                                  'unsaved work in the VM is lost. Use Shut down / Restart when you can.')
+        dlg.add_button('Cancel', Gtk.ResponseType.CANCEL)
+        go = dlg.add_button('Power off' if kind == 'off' else 'Reset', Gtk.ResponseType.OK)
+        go.get_style_context().add_class('destructive-action')
+        ok = dlg.run() == Gtk.ResponseType.OK
+        dlg.destroy()
+        if ok:
+            dom = self.conn.lookupByName(name)
+            self.act(name, verb, lambda: fn(dom), toaster=toaster)
 
     def start_lab(self):
         if self.lab_run:
