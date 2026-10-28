@@ -75,7 +75,7 @@ TEMPLATE = """<domain type='kvm'>
 {nics}    <input type='tablet' bus='usb'/>
     <tpm model='tpm-crb'><backend type='emulator' version='2.0'/></tpm>
     <graphics type='spice' autoport='yes'><listen type='address'/><image compression='off'/></graphics>
-    <video><model type='vga' vram='16384' heads='1' primary='yes'/></video>
+    <video><model type='qxl' ram='65536' vram='65536' vgamem='16384' heads='1' primary='yes'/></video>
     <channel type='spicevmc'><target type='virtio' name='com.redhat.spice.0'/></channel>
     <channel type='unix'><target type='virtio' name='org.qemu.guest_agent.0'/></channel>
     <memballoon model='none'/>

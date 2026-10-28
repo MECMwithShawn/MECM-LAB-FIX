@@ -8,7 +8,7 @@ Fixes, scripts and notes for running the **Windows 11 and Office 365 Deployment 
 | Host | Folder | What's there |
 | :--- | :--- | :--- |
 | **Windows (Hyper-V)** | [`Windows/`](./Windows) | The original fixes: client VM start errors (`0x800705B4`), Wi-Fi-safe NAT switch, CM1 dual-NIC routing, blocked public DNS, guest updates, cleanup, guest Wi-Fi workarounds. Start with [`Windows/README.md`](./Windows/README.md) and [`Windows/LAB_REFERENCE_GUIDE.md`](./Windows/LAB_REFERENCE_GUIDE.md). |
-| **Linux (KVM / libvirt)** | [`Linux/`](./Linux) | Moving the provisioned Hyper-V lab onto Linux: disk-chain conversion, libvirt networks and VMs, a one-shot first-boot script, Hyper-V-style checkpoints, and running commands in VMs with no sign-in. Start with [`Linux/README.md`](./Linux/README.md). |
+| **Linux (KVM / libvirt)** | [`Linux/`](./Linux) | Moving the provisioned Hyper-V lab onto Linux: disk-chain conversion, libvirt networks and VMs, a one-shot first-boot script, Hyper-V-style checkpoints, running commands in VMs with no sign-in, and **Lab Manager**, a Windows 11-style app to run the VMs. Start with [`Linux/README.md`](./Linux/README.md). |
 
 ## Same network design on both
 

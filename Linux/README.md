@@ -13,6 +13,7 @@ All 9 VMs run: DC1, GW1, CM1, CLIENT1–4, and the blank CLIENT5/6 for PXE/OSD.
 | [`convert/`](./convert) | `vhdxflat.py` merges each Hyper-V checkpoint chain into one disk; `convert-all.sh` does all VMs → qcow2; `verify.py` cross-checks against libvhdi |
 | [`vm/`](./vm) | `define-lab.sh` creates the networks and VMs; `make-vms.py` holds the VM specs; `checkpoint.sh` gives Hyper-V-style checkpoints |
 | [`guest/`](./guest) | Scripts that run **inside** Windows, delivered on a CD (`lab-fixup.iso`) built by `build-iso.sh` |
+| [`manager/`](./manager) | **Lab Manager**: a Windows 11-style app to start, stop and connect to the VMs (`install.sh` adds it to the apps menu) |
 | [`tools/`](./tools) | `vmexec.py` runs PowerShell in a VM with no sign-in; `vmtype.py` types into a VM; `shot.sh` screenshots; `peek.sh` reads a VM's offline IP config |
 
 Everything works on `$LAB` (default `~/vms/m365-lab`), which holds `src/`, `disks/`, `xml/` and the ISO.
@@ -48,6 +49,7 @@ Work Wi-Fi (only the laptop's own MAC)          laptop
 sudo apt install -y libvirt-daemon-system virt-manager swtpm swtpm-tools genisoimage ntfs-3g
 sudo usermod -aG libvirt,kvm $USER          # then log out and back in
 setfacl -m u:libvirt-qemu:x $HOME           # let QEMU reach disks under your home
+gsettings set org.virt-manager.virt-manager.console resize-guest 1   # VM display follows the window
 ```
 
 ### 2. Get the Hyper-V disks
@@ -114,6 +116,25 @@ It creates and links the domain GPO **Lab - Pause Windows Update**: no automatic
 updates, but `wuauserv` stays on so CM1's WSUS / Software Update Point can still serve updates.
 Unlink it for lab 5.1.
 
+## Lab Manager
+
+```bash
+Linux/manager/install.sh          # adds "Lab Manager" to the apps menu
+```
+
+A cleaner front end than virt-manager for this lab:
+- **Main window:** servers and clients as cards with role, addresses, status and a live CPU
+  graph. Each card has Start / Shut down, Connect, and a menu with Restart, Turn off (force),
+  Checkpoints… and Open in virt-manager. **Start lab** boots DC1 → GW1 → CM1 → CLIENT1–4, waiting
+  for DC1 and GW1 to answer before starting the rest.
+- **Console:** a slim header (VM name, role, Ctrl+Alt+Del, power, full screen) over the VM, which
+  resizes to the window. In full screen, touch the top edge for the same controls. Press Ctrl+Alt
+  to release the keyboard.
+
+It uses the same SPICE display widget as virt-manager. A VM accepts one viewer at a time, so
+opening it in Lab Manager disconnects a virt-manager console showing the same VM. Run one VM's
+console directly with `labmanager.py --console HYD-DC1`.
+
 ## Checkpoints (the lab guide's "Revert HYD-CLIENT4 to the latest checkpoint")
 
 libvirt can't snapshot a running UEFI VM the way Hyper-V does. With the VM shut down:
@@ -134,6 +155,7 @@ Linux/vm/checkpoint.sh list   HYD-CLIENT4
 | Static IPs gone after the move | Hyper-V synthetic NICs became new e1000e adapters | `guest/fix-network.ps1`; fixed MACs tell CorpNet from InterNet NICs |
 | GW1 NAT dead | RRAS NAT was bound to the old adapter IDs | `fix-network.ps1` rebinds `Ethernet 2` (public) and `Ethernet` (private) |
 | Servers power off about hourly | Server 2025 evaluation expired | `slmgr /rearm` in `server-finish.ps1` (one rearm left in the 25H2 kit; it's now 0) |
+| VM display doesn't resize with the window | `vga` has fixed modes; the virtio GPU driver on Windows only offers its own mode list (DC1 stuck at 2048×1536); virt-manager's auto-resize was off | **QXL** graphics in `make-vms.py`: the SPICE agent sets the exact window size through its driver (`qxldod`, from the guest tools). Plus `resize-guest 1`; reopen the console window afterwards. Changing the graphics model needs a full power-off, not a Windows restart |
 | New ISO not visible in Windows | Swapping media in place doesn't signal a change | Eject, then insert (see `build-iso.sh`) |
 | `virsh` permission denied right after `usermod` | Group membership applies at next login | Log out and back in, or prefix commands with `sg libvirt -c` |
 
