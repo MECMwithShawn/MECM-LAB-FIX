@@ -140,12 +140,17 @@ A cleaner front end than virt-manager for this lab:
   Safe actions go through the guest agent when the VM has guest tools, else the virtual power
   button. Windows ignores the power button while it's still starting up, so if the VM is still
   running 90 seconds after Shut down you get a message suggesting to try again or use Power off.
-- **Console:** a slim header (VM name, role, Ctrl+Alt+Del, power, full screen) over the VM, which
-  resizes to the window. In full screen, touch the top edge for the same controls. Press Ctrl+Alt
+- **Console:** a slim header (VM name, role, Ctrl+Alt+Del, resolution, power, full screen) over
+  the VM. The resolution button offers **Auto** (Windows follows the window size) or a fixed
+  1280×720 … 2560×1440, which is scaled to fit the window. The choice is remembered per VM in
+  `~/.config/lab-manager/settings.json`. It needs the guest tools (SPICE agent) and QXL graphics,
+  so it's greyed out on VMs without them. In full screen, touch the top edge for the same controls. Press Ctrl+Alt
   to release the keyboard.
 
 It uses the same SPICE display widget as virt-manager. A VM accepts one viewer at a time, so
-opening it in Lab Manager disconnects a virt-manager console showing the same VM. Run one VM's
+opening it in Lab Manager disconnects a virt-manager console showing the same VM. If another viewer
+takes over, the console shows **Disconnected** with a **Reconnect** button rather than fighting it.
+Lab Manager runs as a single instance: launching it again brings the open window to the front. Run one VM's
 console directly with `labmanager.py --console HYD-DC1`.
 
 ## Checkpoints (the lab guide's "Revert HYD-CLIENT4 to the latest checkpoint")
