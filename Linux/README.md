@@ -126,7 +126,11 @@ A cleaner front end than virt-manager for this lab:
 - **Main window:** servers and clients as cards with role, addresses, status and a live CPU
   graph. Each card has Start / Shut down, Connect, and a menu with Restart, Turn off (force),
   Checkpoints… and Open in virt-manager. **Start lab** boots DC1 → GW1 → CM1 → CLIENT1–4, waiting
-  for DC1 and GW1 to answer before starting the rest.
+  for DC1 and GW1 to answer before starting the rest. While it runs, the header shows its progress
+  and the button becomes **Cancel**; any VM you start or shut down yourself meanwhile is skipped.
+- **Shut down** uses the guest agent when the VM has one, else the virtual power button. Windows
+  ignores the power button while it's still starting up, so if the VM is still running 90 seconds
+  later you get a message suggesting to try again or use Turn off (force).
 - **Console:** a slim header (VM name, role, Ctrl+Alt+Del, power, full screen) over the VM, which
   resizes to the window. In full screen, touch the top edge for the same controls. Press Ctrl+Alt
   to release the keyboard.
