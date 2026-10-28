@@ -5,13 +5,16 @@ Main window: VM cards with role, status, guest tools state, live CPU graph, Conn
 and VMware-style power options: safe Shut down / Restart (through Windows) and hard Power off /
 Reset (like the physical buttons, confirmed first). "Start lab" boots DC1 -> GW1 -> CM1 -> CLIENT1-4 in order,
 shows its progress, can be cancelled, and skips any VM you start or stop yourself meanwhile.
-Console: a slim header (VM name, Ctrl+Alt+Del, power, full screen) over the SPICE display,
-which resizes the guest to the window (needs QXL graphics + the SPICE agent in the guest).
+Console: a slim header (VM name, Ctrl+Alt+Del, resolution, power, full screen) over the SPICE
+display. Resolution "Auto" resizes the guest to the window; a fixed size is scaled to fit. Both need
+QXL graphics + the SPICE agent in the guest. Choices are kept per VM in ~/.config/lab-manager.
 
 Run: python3 labmanager.py            (or: labmanager.py --console HYD-DC1)
 Needs: python3-gi, gir1.2-spiceclientgtk-3.0, python3-libvirt (all pulled in by virt-manager),
 qemu-utils for checkpoints, and membership of the libvirt group.
 """
+import json
+import os
 import re
 import subprocess
 import sys
@@ -44,6 +47,26 @@ LAB = {
     'HYD-Client5': ('client', 'Bare metal · PXE / OSD', 'DHCP'),
     'HYD-Client6': ('client', 'Bare metal · PXE / OSD', 'DHCP'),
 }
+RESOLUTIONS = [(1280, 720), (1366, 768), (1600, 900), (1920, 1080), (2560, 1440)]
+SETTINGS = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config')), 'lab-manager', 'settings.json')
+
+
+def load_settings():
+    try:
+        with open(SETTINGS) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(data):
+    os.makedirs(os.path.dirname(SETTINGS), exist_ok=True)
+    tmp = SETTINGS + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(data, f, indent=1)
+    os.replace(tmp, SETTINGS)
+
+
 START_ORDER = ['HYD-DC1', 'HYD-GW1', 'HYD-CM1', 'HYD-CLIENT1', 'HYD-CLIENT2', 'HYD-CLIENT3', 'HYD-CLIENT4']
 
 STATE_TEXT = {
@@ -115,6 +138,8 @@ popover separator { background-color: rgba(255,255,255,0.08); }
 }
 .placeholder { color: #9a9a9a; font-size: 14px; }
 .placeholder-title { color: #ffffff; font-size: 18px; font-weight: 600; }
+button.res { font-feature-settings: "tnum"; }
+.menu-item.checked .menu-title { color: #60cdff; font-weight: 600; }
 .fs-bar { background: rgba(32,32,32,0.92); border-radius: 0 0 8px 8px; padding: 4px 8px; }
 """
 
@@ -206,6 +231,8 @@ def popover_menu(relative_to, items):
         desc = item[3] if len(item) > 3 else None
         b = Gtk.Button(relief=Gtk.ReliefStyle.NONE)
         b.get_style_context().add_class('menu-item')
+        if len(item) > 4 and item[4]:
+            b.get_style_context().add_class('checked')
         inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         t = Gtk.Label(label=label, xalign=0)
         t.get_style_context().add_class('menu-title')
@@ -514,8 +541,9 @@ class Console(Gtk.Window):
         self.get_style_context().add_class('lab-console')
         self.set_default_size(1280, 800)
         self.set_icon_name('computer')
-        self.session = self.display = None
+        self.session = self.display = self.main = None
         self.is_fullscreen = False
+        self.resolution = load_settings().get('resolution', {}).get(self.name)  # None = Auto, else [w, h]
 
         hb = Gtk.HeaderBar(show_close_button=True, title=self.name.replace('HYD-', ''))
         hb.set_subtitle(LAB.get(self.name, ('', '', ''))[1])
@@ -526,6 +554,13 @@ class Console(Gtk.Window):
         self.power_btn.connect('clicked', lambda *_: self.power_menu(self.power_btn))
         hb.pack_end(self.fs_btn)
         hb.pack_end(self.power_btn)
+        self.res_btn = Gtk.Button()
+        self.res_btn.get_style_context().add_class('subtle')
+        self.res_btn.get_style_context().add_class('res')
+        self.res_btn.set_valign(Gtk.Align.CENTER)
+        self.res_btn.connect('clicked', lambda *_: self.resolution_menu(self.res_btn))
+        hb.pack_end(self.res_btn)
+        self.update_res_button()
         self.set_titlebar(hb)
 
         self.overlay = Gtk.Overlay()
@@ -583,6 +618,7 @@ class Console(Gtk.Window):
             return True
         running = state == libvirt.VIR_DOMAIN_RUNNING
         self.cad.set_sensitive(running and self.display is not None)
+        self.update_res_button()
         if running and self.session is None:
             self.open_session()
         elif not running:
@@ -617,11 +653,13 @@ class Console(Gtk.Window):
 
     def on_channel(self, _session, channel):
         if isinstance(channel, SpiceClientGLib.MainChannel):
+            self.main = channel
             GObject.GObject.connect(channel, 'channel-event', self.on_main_event)
+            GObject.GObject.connect(channel, 'notify::agent-connected', lambda *_: GLib.idle_add(self.on_agent))
         if isinstance(channel, SpiceClientGLib.DisplayChannel) and self.display is None:
             cid = channel.get_property('channel-id')
             self.display = SpiceClientGtk.Display.new(self.session, cid)
-            self.display.set_property('resize-guest', True)
+            self.display.set_property('resize-guest', self.resolution is None)
             self.display.set_property('scaling', True)
             self.display.set_property('grab-keyboard', True)
             self.display.set_property('grab-mouse', False)
@@ -635,7 +673,60 @@ class Console(Gtk.Window):
                      SpiceClientGLib.ChannelEvent.ERROR_IO, SpiceClientGLib.ChannelEvent.ERROR_LINK):
             GLib.idle_add(self.close_session)
 
+    # -- resolution ---------------------------------------------------------
+    def agent_ready(self):
+        return bool(self.main and self.main.get_property('agent-connected'))
+
+    def update_res_button(self):
+        label = 'Auto' if self.resolution is None else '{}×{}'.format(*self.resolution)
+        self.res_btn.set_label(label)
+        ready = self.agent_ready()
+        self.res_btn.set_sensitive(ready)
+        self.res_btn.set_tooltip_text('Display resolution' if ready else
+                                      'Needs the guest tools (SPICE agent) running in this VM')
+
+    def on_agent(self):
+        self.update_res_button()
+        if self.agent_ready():
+            self.apply_resolution()
+        return False
+
+    def resolution_menu(self, widget):
+        items = [('Auto', lambda: self.set_resolution(None), True, 'Follows the window size', self.resolution is None), None]
+        for w, h in RESOLUTIONS:
+            items.append((f'{w}×{h}', lambda r=[w, h]: self.set_resolution(r), True, None, self.resolution == [w, h]))
+        popover_menu(widget, items).popup()
+
+    def set_resolution(self, res):
+        self.resolution = res
+        data = load_settings()
+        per_vm = data.setdefault('resolution', {})
+        if res is None:
+            per_vm.pop(self.name, None)
+        else:
+            per_vm[self.name] = res
+        save_settings(data)
+        self.update_res_button()
+        self.apply_resolution()
+
+    def apply_resolution(self):
+        """Auto: let the display widget size the guest to the window. Fixed: ask the guest's
+        SPICE agent for that mode and scale the picture to the window."""
+        if not (self.display and self.agent_ready()):
+            return
+        if self.resolution is None:
+            self.display.set_property('resize-guest', True)
+            alloc = self.display.get_allocation()
+            w, h = alloc.width, alloc.height
+        else:
+            self.display.set_property('resize-guest', False)
+            w, h = self.resolution
+        self.main.update_display_enabled(0, True, False)
+        self.main.update_display(0, 0, 0, w, h, False)
+        self.main.send_monitor_config()
+
     def close_session(self):
+        self.main = None
         if self.display:
             self.stack.remove(self.display)
             self.display.destroy()
