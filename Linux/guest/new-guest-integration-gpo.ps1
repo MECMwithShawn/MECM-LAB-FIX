@@ -1,4 +1,5 @@
 # Creates and links the "Lab - VM guest integration" GPO at the domain root (run on DC1, elevated).
+# - Display never turns off, so Lab Manager's previews and consoles aren't black.
 # - Power button = Shut down and shutdown allowed from the sign-in/lock screen, so a safe shutdown
 #   from Lab Manager (ACPI power button) works even on VMs without the guest agent.
 # - Startup script: installs the virtio-win guest tools (QEMU guest agent, SPICE agent, drivers)
@@ -9,7 +10,7 @@ $name = 'Lab - VM guest integration'
 $domain = Get-ADDomain
 $gpo = Get-GPO -Name $name -ErrorAction SilentlyContinue
 if (-not $gpo) {
-    $gpo = New-GPO -Name $name -Comment 'KVM lab: power button shuts down (also from the lock screen); startup script installs the virtio-win guest tools from the lab CD.'
+    $gpo = New-GPO -Name $name -Comment 'KVM lab: display never off; power button shuts down (also from the lock screen); startup script installs the virtio-win guest tools from the lab CD.'
 }
 
 # Startup script in SYSVOL (PowerShell scripts are listed in psscripts.ini)
@@ -26,6 +27,7 @@ $p = Start-Process "${cd}:\virtio-win-guest-tools.exe" '/quiet /norestart' -Wait
 "$(Get-Date -Format s) exit code $($p.ExitCode)" | Out-File $log -Append
 '@
 $ini = "[Startup]`r`n0CmdLine=install-guest-tools.ps1`r`n0Parameters=`r`n"
+if (Test-Path "$root\psscripts.ini") { (Get-Item "$root\psscripts.ini" -Force).Attributes = 'Normal' }  # hidden files can't be overwritten
 [IO.File]::WriteAllText("$root\psscripts.ini", $ini, [Text.Encoding]::Unicode)
 (Get-Item "$root\psscripts.ini" -Force).Attributes = 'Hidden'
 
@@ -33,6 +35,11 @@ $ini = "[Startup]`r`n0CmdLine=install-guest-tools.ps1`r`n0Parameters=`r`n"
 $pb = 'HKLM\SOFTWARE\Policies\Microsoft\Power\PowerSettings\7648EFA3-DD9C-4E3E-B566-50F929386280'
 Set-GPRegistryValue -Name $name -Key $pb -ValueName ACSettingIndex -Type DWord -Value 3 | Out-Null  # 3 = Shut down
 Set-GPRegistryValue -Name $name -Key $pb -ValueName DCSettingIndex -Type DWord -Value 3 | Out-Null
+# Display never turns off: a VM has no monitor to save, and a blanked screen just hides it from
+# Lab Manager's previews and consoles (3C0BC021-... = "Turn off the display", 0 = never)
+$disp = 'HKLM\SOFTWARE\Policies\Microsoft\Power\PowerSettings\3C0BC021-C8A8-4E07-A973-6B14CBCB2B7E'
+Set-GPRegistryValue -Name $name -Key $disp -ValueName ACSettingIndex -Type DWord -Value 0 | Out-Null
+Set-GPRegistryValue -Name $name -Key $disp -ValueName DCSettingIndex -Type DWord -Value 0 | Out-Null
 Set-GPRegistryValue -Name $name -Key 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' `
     -ValueName ShutdownWithoutLogon -Type DWord -Value 1 | Out-Null
 

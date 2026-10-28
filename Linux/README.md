@@ -119,7 +119,9 @@ Clients: run `D:\virtio-win-guest-tools.exe` once in each when you use it.
 
 On DC1: `D:\new-guest-integration-gpo.ps1` (or through the agent:
 `sg libvirt -c "python3 Linux/tools/vmexec.py HYD-DC1" < Linux/guest/new-guest-integration-gpo.ps1`).
-It creates and links the domain GPO **Lab - VM guest integration**:
+It creates and links the domain GPO **Lab - VM guest integration** (safe to rerun):
+- **Display never turns off.** A VM has no monitor to save, and a blanked screen only hides
+  it from Lab Manager's previews and consoles.
 - **Power button = Shut down**, also allowed from the sign-in/lock screen. Without this, the
   Windows 11 clients ignore the virtual power button, so a safe shutdown from Lab Manager
   did nothing on VMs without the guest agent.
@@ -161,8 +163,10 @@ A cleaner front end than virt-manager for this lab:
   running 90 seconds after Shut down you get a message suggesting to try again or use Power off.
 - **Consoles view** (the **List | Consoles** switch in the header): live previews of every VM,
   refreshed every 3 seconds while the view is showing. Click a preview (or **Connect**) to open its
-  console; off VMs have **Start**. When Windows has turned its screen off for being idle, the tile
-  says **Screen asleep** with a **Wake** button (sends Shift). Previews come from libvirt
+  console; off VMs have **Start**. If a VM's screen is blank because Windows turned the display off,
+  the view wakes it automatically (presses Shift) the first time it sees it; a **Wake** button
+  stays as a manual backup. The guest-integration GPO sets "turn off the display" to never, so
+  the screens stay on after that. Previews come from libvirt
   screenshots, not SPICE, so they don't take a VM's one viewer slot: an open console keeps working.
   The app remembers which view you used last.
 - **Console:** a slim header (VM name, role, Ctrl+Alt+Del, resolution, power, full screen) over

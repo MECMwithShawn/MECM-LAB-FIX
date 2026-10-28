@@ -900,6 +900,7 @@ class ConsoleGrid(Gtk.ScrolledWindow):
             self.tiles[n] = self._tile(n)
             self.flow.add(self.tiles[n]['root'])
         self.active = False
+        self.woken = set()  # VMs woken automatically since the view was last opened
         self._stop = threading.Event()
         threading.Thread(target=self._worker, daemon=True).start()
 
@@ -1014,13 +1015,21 @@ class ConsoleGrid(Gtk.ScrolledWindow):
         # Windows turns the display off when idle: an all-black frame. Say so instead of a black box.
         pixels = small.get_pixels()
         blank = max(pixels[::97]) < 12
+        if blank and name not in self.woken:
+            # Wake it once per opening of the view; the guest-integration GPO keeps it awake after that.
+            self.woken.add(name)
+            self.wake(name, quiet=True)
         t['screen'].set_visible_child_name('asleep' if blank else 'live')
         return False
 
-    def wake(self, name):
+    def wake(self, name, quiet=False):
         dom = self.app.conn.lookupByName(name)
         # Left Shift (Linux keycode 42): harmless, and enough to wake the guest's display
-        self.app.act(name, 'Waking', lambda: dom.sendKey(libvirt.VIR_KEYCODE_SET_LINUX, 0, [42], 1, 0))
+        press = lambda: dom.sendKey(libvirt.VIR_KEYCODE_SET_LINUX, 0, [42], 1, 0)
+        if quiet:
+            run_bg(press)
+        else:
+            self.app.act(name, 'Waking', press)
 
     def stop(self):
         self._stop.set()
@@ -1094,6 +1103,7 @@ class LabManager:
         view = self.view_stack.get_visible_child_name()
         self.grid.active = view == 'consoles'
         if self.grid.active:
+            self.grid.woken.clear()
             self.grid.refresh_states()
             w, h = self.window.get_size()
             if w < 1100:  # room for three previews side by side
