@@ -1,0 +1,4 @@
+<network>
+  <name>HYD-CorpNet</name>
+  <bridge name="virbr-hydcorp" stp="on" delay="0"/>
+</network>
