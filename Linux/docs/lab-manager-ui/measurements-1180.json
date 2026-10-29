@@ -1,0 +1,23 @@
+{
+  "scope": "simulated fixture; excludes libvirt collection and real console image decoding",
+  "samples": 150,
+  "tick": {
+    "median_ms": 0.39,
+    "p95_ms": 1.948,
+    "max_ms": 2.279
+  },
+  "resource_render": {
+    "median_ms": 0.551,
+    "p95_ms": 1.09,
+    "max_ms": 3.518
+  },
+  "timeline_draw": {
+    "median_ms": 0.076,
+    "p95_ms": 0.241,
+    "max_ms": 1.135
+  },
+  "window_size": [
+    1180,
+    1000
+  ]
+}

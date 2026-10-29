@@ -2,17 +2,17 @@
 """Lab Manager: a Windows 11-style window for the hydration lab VMs (libvirt qemu:///system).
 
 Main window, three views:
-- List: VM cards with status, role, Windows version, live CPU / memory / I/O (or when it was last
-  used / frozen), a facts strip (addresses, signed in, uptime, C:, checkpoints), warning chips
-  (clock drift, full C:, guest tools not answering), an expandable details panel, Connect, and
+- List: compact VM rows with status, role, Windows version, live CPU / host RAM / I/O (or when
+  last used / frozen), visible warning chips and remembered expandable facts/details (addresses,
+  sign-in, uptime, guest C: or host disk footprint, checkpoints), Connect and
   VMware-style power options: safe Shut down / Restart (through Windows) and hard Power off / Reset
   (like the physical buttons, confirmed first). Windows details come from the QEMU guest agent
   (GuestProbe, about once a minute), so VMs without guest tools show the lab plan instead.
 - Consoles: live previews of every VM from libvirt screenshots, which don't take the VM's one SPICE
   viewer slot; click one to open its console.
-- Resources: a dashboard of what the lab costs the host: rings for CPU / memory / storage, a
-  verdict, capacity, host threads, KPIs, insights with actions, an activity timeline per VM, where
-  host RAM goes, a per-VM table, the lab networks and host facts.
+- Resources: compact memory / CPU / storage cards and capacity facts, a smooth neon Activity
+  chart, scoped insights with actions, host RAM allocation, a per-VM table, the lab networks
+  and host facts. Host threads remain available in the allocation popover.
 "Start lab" boots DC1 -> GW1 -> CM1 -> CLIENT1-4 in order,
 shows its progress, can be cancelled, and skips any VM you start or stop yourself meanwhile.
 Console: a slim header (VM name, Ctrl+Alt+Del, resolution, power, full screen) over the SPICE
@@ -96,114 +96,114 @@ STATE_TEXT = {
 }
 
 CSS = b"""
-window.lab, window.lab-console { background-color: #202020; }
+window.lab, window.lab-console { background-color: #0c121b; }
 .lab headerbar, .lab-console headerbar {
-    background: #1b1b1b; border: none; border-bottom: 1px solid rgba(255,255,255,0.06);
+    background: #131c28; border: none; border-bottom: 1px solid rgba(255,255,255,0.06);
     box-shadow: none; min-height: 40px; padding: 0 4px 0 12px;
 }
 .lab headerbar .title, .lab-console headerbar .title { font-weight: 600; font-size: 13px; }
-.lab headerbar .subtitle, .lab-console headerbar .subtitle { font-size: 11px; color: #9a9a9a; }
-.section { font-weight: 600; font-size: 13px; color: #d0d0d0; margin: 18px 2px 8px 2px; }
+.lab headerbar .subtitle, .lab-console headerbar .subtitle { font-size: 11px; color: #a1b1c4; }
+.section { font-weight: 600; font-size: 13px; color: #b8c6d8; margin: 18px 2px 8px 2px; }
 .card {
-    background: #2b2b2b; border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);
+    background: #131c28; border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);
     padding: 10px 12px; margin-bottom: 6px;
 }
-.card:hover { background: #303030; }
-.vm-name { font-weight: 600; font-size: 14px; color: #ffffff; }
-.vm-role { font-size: 12px; color: #a8a8a8; }
-.vm-addr { font-size: 11px; color: #8a8a8a; font-feature-settings: "tnum"; }
+.card:hover { background: #192432; }
+.vm-name { font-weight: 600; font-size: 14px; color: #e9eff7; }
+.vm-role { font-size: 12px; color: #a1b1c4; }
+.vm-addr { font-size: 11px; color: #869ab1; font-feature-settings: "tnum"; }
 .pill { border-radius: 999px; padding: 1px 10px; font-size: 11px; font-weight: 600; }
-.pill.running { background: rgba(108,203,95,0.16); color: #6ccb5f; }
-.pill.off { background: rgba(255,255,255,0.07); color: #9e9e9e; }
-.pill.busy, .pill.paused { background: rgba(252,225,0,0.14); color: #fce100; }
+.pill.running { background: rgba(108,203,95,0.16); color: #8acc9c; }
+.pill.off { background: rgba(255,255,255,0.07); color: #a1b1c4; }
+.pill.busy, .pill.paused { background: rgba(252,225,0,0.14); color: #e2b86a; }
 .pill.error { background: rgba(255,153,164,0.16); color: #ff99a4; }
 .pill.saved { background: rgba(176,150,255,0.18); color: #c3b1ff; }
-.cpu { font-size: 11px; color: #9a9a9a; font-feature-settings: "tnum"; }
+.cpu { font-size: 11px; color: #a1b1c4; font-feature-settings: "tnum"; }
 button.icon {
     background: none; border: none; box-shadow: none; border-radius: 6px;
-    min-width: 30px; min-height: 30px; padding: 0; color: #e0e0e0;
+    min-width: 30px; min-height: 30px; padding: 0; color: #e9eff7;
 }
 button.icon:hover { background: rgba(255,255,255,0.08); }
 button.icon:disabled { color: rgba(255,255,255,0.25); }
 button.accent {
-    background: #60cdff; color: #003a57; border: none; box-shadow: none; border-radius: 6px;
+    background: #59c9ef; color: #003a57; border: none; box-shadow: none; border-radius: 6px;
     font-weight: 600; padding: 4px 14px; min-height: 28px;
 }
 button.accent:hover { background: #5abce9; }
 button.accent:disabled { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.35); }
 button.subtle {
-    background: rgba(255,255,255,0.06); color: #f0f0f0; border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.06); color: #e9eff7; border: 1px solid rgba(255,255,255,0.06);
     box-shadow: none; border-radius: 6px; padding: 4px 12px; min-height: 28px;
 }
 button.subtle:hover { background: rgba(255,255,255,0.10); }
 popover.background {
-    background-color: #2c2c2c; color: #f2f2f2; border-radius: 8px;
+    background-color: #192432; color: #e9eff7; border-radius: 8px;
     border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 8px 24px rgba(0,0,0,0.45);
 }
 popover separator { background-color: rgba(255,255,255,0.08); }
 .menu-item { padding: 6px 10px; border-radius: 4px; min-width: 230px; }
 .menu-item:hover { background: rgba(255,255,255,0.08); }
-.menu-title { font-size: 13px; color: #f2f2f2; }
+.menu-title { font-size: 13px; color: #e9eff7; }
 .menu-item:disabled .menu-title { color: rgba(255,255,255,0.35); }
-.menu-desc { font-size: 11px; color: #9a9a9a; }
+.menu-desc { font-size: 11px; color: #a1b1c4; }
 .menu-item:disabled .menu-desc { color: rgba(255,255,255,0.25); }
-.menu-header { font-size: 11px; font-weight: 600; color: #8a8a8a; margin: 6px 10px 2px 10px; }
-.tools-on { font-size: 11px; color: #60cdff; }
-.tools-off { font-size: 11px; color: #8a8a8a; }
+.menu-header { font-size: 11px; font-weight: 600; color: #869ab1; margin: 6px 10px 2px 10px; }
+.tools-on { font-size: 11px; color: #59c9ef; }
+.tools-off { font-size: 11px; color: #869ab1; }
 .toast {
-    background: #2d2d2d; color: #f2f2f2; border-radius: 8px; padding: 10px 16px;
+    background: #192432; color: #e9eff7; border-radius: 8px; padding: 10px 16px;
     border: 1px solid rgba(255,255,255,0.08); margin: 16px;
 }
-.placeholder { color: #9a9a9a; font-size: 14px; }
-.placeholder-title { color: #ffffff; font-size: 18px; font-weight: 600; }
+.placeholder { color: #a1b1c4; font-size: 14px; }
+.placeholder-title { color: #e9eff7; font-size: 18px; font-weight: 600; }
 button.res { font-feature-settings: "tnum"; }
-.menu-item.checked .menu-title { color: #60cdff; font-weight: 600; }
-.tile { background: #2b2b2b; border-radius: 8px; border: 1px solid rgba(255,255,255,0.06); padding: 8px; }
-.tile:hover { background: #333333; border-color: rgba(96,205,255,0.45); }
+.menu-item.checked .menu-title { color: #59c9ef; font-weight: 600; }
+.tile { background: #131c28; border-radius: 8px; border: 1px solid rgba(255,255,255,0.06); padding: 8px; }
+.tile:hover { background: #202e3e; border-color: rgba(96,205,255,0.45); }
 .tile-screen { background: #111111; border-radius: 5px; }
-.tile-name { font-weight: 600; font-size: 13px; color: #ffffff; }
-.tile-off { color: #8a8a8a; font-size: 12px; }
+.tile-name { font-weight: 600; font-size: 13px; color: #e9eff7; }
+.tile-off { color: #869ab1; font-size: 12px; }
 stackswitcher button { padding: 2px 14px; min-height: 26px; }
-.res-main { font-size: 13px; color: #f0f0f0; font-feature-settings: "tnum"; }
-.res-total { font-size: 13px; color: #60cdff; font-weight: 600; font-feature-settings: "tnum"; }
-.res-sub { font-size: 11px; color: #9a9a9a; font-feature-settings: "tnum"; }
-/* ---- List: richer VM cards ---- */
-.card.vm { padding: 12px 14px 10px 14px; margin: 0 2px 8px 2px; border-top-color: rgba(255,255,255,0.09);
-    box-shadow: 0 1px 2px rgba(0,0,0,0.30); transition: background-color 120ms ease-out, border-color 120ms ease-out; }
-.card.vm:hover { background: #2f2f2f; border-color: rgba(255,255,255,0.10); }
-.card.vm.off .facts { opacity: 0.6; }
-.os-chip { border-radius: 4px; padding: 0 6px; font-size: 11px; color: #c8c8c8; font-feature-settings: "tnum";
+.res-main { font-size: 13px; color: #e9eff7; font-feature-settings: "tnum"; }
+.res-total { font-size: 13px; color: #59c9ef; font-weight: 600; font-feature-settings: "tnum"; }
+.res-sub { font-size: 11px; color: #a1b1c4; font-feature-settings: "tnum"; }
+/* ---- List: compact VM rows ---- */
+.card.vm { padding: 12px 14px; margin: 0 2px 6px 2px; border-color: #283648;
+    box-shadow: none; transition: background-color 120ms ease-out, border-color 120ms ease-out; }
+.card.vm:hover { background: #192432; border-color: rgba(255,255,255,0.10); }
+.card.vm.off .facts { opacity: 1; }
+.os-chip { border-radius: 4px; padding: 0 6px; font-size: 11px; color: #b8c6d8; font-feature-settings: "tnum";
     background-color: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.06); }
-.os-chip.none { color: #8a8a8a; background-color: rgba(255,255,255,0.03); }
-.mini-cap { font-size: 10px; font-weight: 600; color: #8a8a8a; }
-.mini-val { font-size: 13px; color: #f0f0f0; font-feature-settings: "tnum"; }
-.stat { font-size: 11px; color: #c8c8c8; font-feature-settings: "tnum"; }
-.off-sum { font-size: 12px; color: #c8c8c8; font-feature-settings: "tnum"; }
-.off-sub { font-size: 11px; color: #8a8a8a; font-feature-settings: "tnum"; }
-.facts { margin: 10px 0 0 52px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); }
-.fact-cap { font-size: 10px; font-weight: 600; color: #8a8a8a; }
-.fact-val { font-size: 12px; color: #e6e6e6; font-feature-settings: "tnum"; }
-.fact-val.muted { color: #7e7e7e; }
-.fact-val.dim-italic { color: #7e7e7e; font-style: italic; }
+.os-chip.none { color: #869ab1; background-color: rgba(255,255,255,0.03); }
+.mini-cap { font-size: 11px; font-weight: 600; color: #869ab1; }
+.mini-val { font-size: 13px; color: #e9eff7; font-feature-settings: "tnum"; }
+.stat { font-size: 11px; color: #b8c6d8; font-feature-settings: "tnum"; }
+.off-sum { font-size: 12px; color: #b8c6d8; font-feature-settings: "tnum"; }
+.off-sub { font-size: 11px; color: #869ab1; font-feature-settings: "tnum"; }
+.facts { margin: 12px 0 0 0; padding-top: 12px; border-top: 1px solid #283648; }
+.fact-cap { font-size: 11px; font-weight: 600; color: #869ab1; }
+.fact-val { font-size: 12px; color: #e9eff7; font-feature-settings: "tnum"; }
+.fact-val.muted { color: #869ab1; }
+.fact-val.dim-italic { color: #869ab1; font-style: italic; }
 .fact-sep { min-width: 1px; background-color: rgba(255,255,255,0.06); margin: 2px 10px; }
-.chips { margin: 8px 0 0 52px; }
+.chips { margin: 8px 0 0 44px; }
 .chip { border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 600; }
 button.chip { border: none; box-shadow: none; min-height: 0; }
-.chip.warn  { background-color: rgba(252,225,0,0.14); color: #fce100; }
+.chip.warn  { background-color: rgba(252,225,0,0.14); color: #e2b86a; }
 .chip.error { background-color: rgba(255,153,164,0.16); color: #ff99a4; }
 button.chip.warn:hover  { background-color: rgba(252,225,0,0.24); }
 button.chip.error:hover { background-color: rgba(255,153,164,0.26); }
 button.chevron { background: none; border: none; box-shadow: none; border-radius: 6px; min-width: 30px; min-height: 30px;
-    padding: 0; color: #a8a8a8; }
-button.chevron:hover { background-color: rgba(255,255,255,0.08); color: #ffffff; }
+    padding: 0; color: #a1b1c4; }
+button.chevron:hover { background-color: rgba(255,255,255,0.08); color: #e9eff7; }
 .vm-detail { background-color: rgba(0,0,0,0.18); border: 1px solid rgba(255,255,255,0.04); border-radius: 6px;
-    padding: 12px 14px; margin: 10px 0 0 52px; }
-.detail-head { font-size: 11px; font-weight: 600; color: #8a8a8a; margin-bottom: 4px; }
-.detail-key { font-size: 11px; color: #8a8a8a; }
-.detail-val { font-size: 12px; color: #e6e6e6; font-feature-settings: "tnum"; }
+    padding: 12px 14px; margin: 12px 0 0 0; }
+.detail-head { font-size: 11px; font-weight: 600; color: #869ab1; margin-bottom: 4px; }
+.detail-key { font-size: 11px; color: #869ab1; }
+.detail-val { font-size: 12px; color: #e9eff7; font-feature-settings: "tnum"; }
 .detail-val.bad { color: #ff99a4; }
-.detail-val.muted { color: #7e7e7e; }
-button.link { background: none; border: none; box-shadow: none; padding: 0; min-height: 0; color: #60cdff; font-size: 12px; }
+.detail-val.muted { color: #869ab1; }
+button.link { background: none; border: none; box-shadow: none; padding: 0; min-height: 0; color: #59c9ef; font-size: 12px; }
 button.link:hover { color: #99ebff; }
 
 /* ---- Resources: hero ---- */
@@ -213,67 +213,118 @@ button.link:hover { color: #99ebff; }
     border: 1px solid rgba(255,255,255,0.07); border-top-color: rgba(255,255,255,0.13); border-radius: 12px;
     padding: 20px 24px; margin: 12px 4px 12px 4px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.30), 0 8px 20px rgba(0,0,0,0.22); }
-.ring-value { font-size: 24px; font-weight: 600; color: #ffffff; font-feature-settings: "tnum"; }
-.ring-unit { font-size: 11px; color: #9a9a9a; }
-.ring-title { font-size: 12px; font-weight: 600; color: #d0d0d0; }
-.ring-legend { font-size: 11px; color: #9a9a9a; font-feature-settings: "tnum"; }
+.ring-value { font-size: 24px; font-weight: 600; color: #e9eff7; font-feature-settings: "tnum"; }
+.ring-unit { font-size: 11px; color: #a1b1c4; }
+.ring-title { font-size: 12px; font-weight: 600; color: #b8c6d8; }
+.ring-legend { font-size: 11px; color: #a1b1c4; font-feature-settings: "tnum"; }
 .vhair { min-width: 1px; margin: 8px 20px;
     background-image: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0.10) 20%, rgba(255,255,255,0.10) 80%, rgba(255,255,255,0)); }
-.hero-title { font-size: 20px; font-weight: 600; color: #ffffff; }
-.hero-sub { font-size: 12px; color: #a8a8a8; font-feature-settings: "tnum"; }
-.eyebrow { font-size: 10px; font-weight: 600; color: #8a8a8a; }
-.headroom-num { font-size: 34px; font-weight: 600; color: #ffffff; font-feature-settings: "tnum"; }
-.headroom-num.warn { color: #fce100; }
+.hero-title { font-size: 20px; font-weight: 600; color: #e9eff7; }
+.hero-sub { font-size: 12px; color: #a1b1c4; font-feature-settings: "tnum"; }
+.eyebrow { font-size: 11px; font-weight: 600; color: #869ab1; }
+.headroom-num { font-size: 34px; font-weight: 600; color: #e9eff7; font-feature-settings: "tnum"; }
+.headroom-num.warn { color: #e2b86a; }
 .headroom-num.crit { color: #ff99a4; }
-.headroom-text { font-size: 14px; color: #d0d0d0; }
+.headroom-text { font-size: 14px; color: #b8c6d8; }
 .kpi { background-color: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.05); border-radius: 6px;
     padding: 8px 10px; }
-.kpi-cap { font-size: 10px; font-weight: 600; color: #8a8a8a; }
-.kpi-val { font-size: 15px; font-weight: 600; color: #f2f2f2; font-feature-settings: "tnum"; }
-.kpi-val.warn { color: #fce100; }
+.kpi-cap { font-size: 11px; font-weight: 600; color: #869ab1; }
+.kpi-val { font-size: 15px; font-weight: 600; color: #e9eff7; font-feature-settings: "tnum"; }
+.kpi-val.warn { color: #e2b86a; }
 
 /* ---- Resources: cards, sections ---- */
 .card.res { border-radius: 10px; padding: 14px 16px; margin: 0 4px 12px 4px; border-top-color: rgba(255,255,255,0.10);
     box-shadow: 0 1px 3px rgba(0,0,0,0.28), 0 4px 12px rgba(0,0,0,0.14); }
-.card.res:hover { background: #2b2b2b; }
+.card.res:hover { background: #131c28; }
 .card.res.listgroup { padding: 0; }
-.section-cap { font-size: 11px; color: #8a8a8a; margin: 18px 2px 8px 2px; font-feature-settings: "tnum"; }
-.scale-tag { font-size: 10px; color: #8a8a8a; background-color: rgba(255,255,255,0.06); border-radius: 4px; padding: 1px 6px; }
+.section-cap { font-size: 11px; color: #869ab1; margin: 18px 2px 8px 2px; font-feature-settings: "tnum"; }
+.scale-tag { font-size: 11px; color: #869ab1; background-color: rgba(255,255,255,0.06); border-radius: 4px; padding: 1px 6px; }
 .seg { background-color: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 2px; }
 .seg radiobutton, .seg button { background: none; border: none; box-shadow: none; border-radius: 4px; padding: 2px 12px;
-    min-height: 22px; font-size: 11px; color: #b0b0b0; transition: background-color 150ms ease-out; }
+    min-height: 22px; font-size: 11px; color: #a1b1c4; transition: background-color 150ms ease-out; }
 .seg radiobutton:hover, .seg button:hover { background-color: rgba(255,255,255,0.06); }
-.seg radiobutton:checked, .seg button:checked { background-color: rgba(96,205,255,0.16); color: #60cdff; font-weight: 600; }
+.seg radiobutton:checked, .seg button:checked { background-color: rgba(96,205,255,0.16); color: #59c9ef; font-weight: 600; }
 .legend-chip { background-color: rgba(255,255,255,0.04); border: none; box-shadow: none; border-radius: 999px;
-    padding: 1px 10px 1px 8px; min-height: 0; font-size: 11px; color: #c8c8c8; font-feature-settings: "tnum"; }
+    padding: 1px 10px 1px 8px; min-height: 0; font-size: 11px; color: #b8c6d8; font-feature-settings: "tnum"; }
 .legend-chip:hover { background-color: rgba(255,255,255,0.08); }
-.legend-chip:checked { background-color: rgba(255,255,255,0.12); color: #ffffff; }
+.legend-chip:checked { background-color: rgba(255,255,255,0.12); color: #e9eff7; }
 
 /* ---- list groups: insights + VM table ---- */
 .lg-head { padding: 8px 16px; background-color: rgba(255,255,255,0.02); border-radius: 10px 10px 0 0; }
-.lg-head label { font-size: 10px; font-weight: 600; color: #8a8a8a; }
+.lg-head label { font-size: 11px; font-weight: 600; color: #869ab1; }
 .lg-sep { min-height: 1px; background-color: rgba(255,255,255,0.05); }
 .insight { padding: 12px 16px; min-height: 44px; }
-.insight-title { font-size: 13px; font-weight: 600; color: #f0f0f0; }
-.insight-body { font-size: 12px; color: #b8b8b8; }
+.insight-title { font-size: 13px; font-weight: 600; color: #e9eff7; }
+.insight-body { font-size: 12px; color: #a1b1c4; }
 .res-row { padding: 8px 16px; transition: background-color 100ms ease-out; }
 .res-row:hover, .res-row.hl { background-color: rgba(255,255,255,0.04); }
 .res-row.focused { background-color: rgba(96,205,255,0.06); }
 .res-row.off { opacity: 0.6; padding-top: 4px; padding-bottom: 4px; }
-.res-name { font-size: 13px; font-weight: 600; color: #ffffff; }
+.res-name { font-size: 13px; font-weight: 600; color: #e9eff7; }
 .res-total-row { padding: 10px 16px; background-color: rgba(96,205,255,0.05);
     border-top: 1px solid rgba(96,205,255,0.20); border-radius: 0 0 10px 10px; }
 
 /* ---- networks + footer ---- */
-.net-title { font-size: 13px; font-weight: 600; color: #f0f0f0; }
-.net-tag { background-color: rgba(255,255,255,0.06); border-radius: 4px; padding: 1px 8px; font-size: 11px; color: #a8a8a8; }
-.net-rate { font-size: 18px; font-weight: 600; color: #ffffff; font-feature-settings: "tnum"; }
-.net-member { font-size: 11px; color: #9a9a9a; }
-.footer { background-color: #262626; border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 10px 16px;
+.net-title { font-size: 13px; font-weight: 600; color: #e9eff7; }
+.net-tag { background-color: rgba(255,255,255,0.06); border-radius: 4px; padding: 1px 8px; font-size: 11px; color: #a1b1c4; }
+.net-rate { font-size: 18px; font-weight: 600; color: #e9eff7; font-feature-settings: "tnum"; }
+.net-member { font-size: 11px; color: #a1b1c4; }
+.footer { background-color: #131c28; border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 10px 16px;
     margin: 0 4px 8px 4px; }
-.foot-key { font-size: 11px; color: #8a8a8a; }
-.foot-val { font-size: 12px; color: #d8d8d8; font-feature-settings: "tnum"; }
+.foot-key { font-size: 11px; color: #869ab1; }
+.foot-val { font-size: 12px; color: #b8c6d8; font-feature-settings: "tnum"; }
 .fs-bar { background: rgba(32,32,32,0.92); border-radius: 0 0 8px 8px; padding: 4px 8px; }
+/* Native shell: identity, navigation and lab actions have distinct places. */
+.app-title { font-size: 14px; font-weight: 600; color: #e9eff7; }
+.app-subtitle { font-size: 11px; color: #a1b1c4; }
+.app-mark { color: #59c9ef; padding: 6px; background-color: #183244; border-radius: 7px; }
+.app-toolbar { background-color: #131c28; border-bottom: 1px solid #283648; padding: 8px 20px; }
+.view-tabs { background-color: #0c121b; border-radius: 7px; padding: 3px; }
+.view-tabs button { background: none; border: none; box-shadow: none; border-radius: 5px;
+    color: #a1b1c4; padding: 4px 14px; min-height: 26px; }
+.view-tabs button:hover { background-color: #192432; color: #e9eff7; }
+.view-tabs button:checked { background-color: #183244; color: #59c9ef; }
+.vm button.accent { background-color: #183244; color: #59c9ef; padding: 4px 10px; }
+.vm button.accent:hover { background-color: #234357; }
+.vm button.accent:disabled { background-color: #192432; color: #869ab1; }
+.mini-note { font-size: 11px; color: #a1b1c4; font-feature-settings: "tnum"; }
+/* Compact Resources layout. Scoped to this view's new style classes. */
+.resource-overview { margin: 14px 4px 2px 4px; }
+.resource-heading { font-size: 20px; font-weight: 600; color: #e9eff7; }
+.resource-summary { font-size: 12px; color: #a1b1c4; font-feature-settings: "tnum"; }
+.resource-metrics > flowboxchild, .resource-facts > flowboxchild,
+.resource-legend > flowboxchild { padding: 0; background: none; border: none; }
+.resource-metric-card { background: #131c28; border: 1px solid #283648;
+    border-radius: 10px; padding: 14px 16px; }
+.resource-metric-label { color: #a1b1c4; font-size: 12px; font-weight: 500; }
+.resource-metric-value { color: #e9eff7; font-size: 30px; font-weight: 600;
+    font-feature-settings: "tnum"; }
+.resource-metric-caption { color: #a1b1c4; font-size: 11px; font-feature-settings: "tnum"; }
+.resource-facts { margin: 2px 2px 0 2px; }
+.resource-fact { padding: 2px 0; }
+.resource-fact-label { font-size: 11px; color: #a1b1c4; }
+.resource-fact-value { font-size: 13px; font-weight: 500; color: #e9eff7;
+    font-feature-settings: "tnum"; }
+.resource-fact-note { font-size: 11px; color: #a1b1c4; font-feature-settings: "tnum"; }
+.resource-heading.warn, .resource-fact-value.warn, .resource-fact-note.warn,
+.resource-metric-value.warn { color: #e2b86a; }
+.resource-heading.crit, .resource-fact-value.crit, .resource-metric-value.crit { color: #ff99a4; }
+button.resource-thread-button { background: none; border: none; box-shadow: none;
+    min-width: 18px; min-height: 18px; padding: 0; color: #a1b1c4; }
+button.resource-thread-button:hover { color: #59c9ef; }
+.card.res.resource-activity, .card.res.resource-activity:hover { background: #101119;
+    border-color: #282734; box-shadow: none; }
+.resource-activity .scale-tag { color: #aaa9c0; background: none; font-size: 11px; }
+.resource-legend-item { color: #d6d8e7; font-size: 11px; font-feature-settings: "tnum";
+    padding: 3px 0; }
+button.resource-legend-item { background: none; border: none; border-radius: 4px;
+    box-shadow: none; min-width: 0; min-height: 20px; padding: 3px 4px; }
+button.resource-legend-item:hover { background: rgba(172,141,255,0.08); }
+button.resource-legend-item:checked { color: #ffffff; background: rgba(172,141,255,0.14); }
+.resource-insights .insight { padding: 9px 14px; min-height: 34px; }
+.resource-insights .insight-title { font-size: 12px; color: #e9eff7; }
+.resource-insights .insight-body { font-size: 11px; color: #a1b1c4; }
+
 """
 
 
@@ -505,8 +556,8 @@ SAVE_DIR = '/var/lib/libvirt/qemu/save'
 
 # One colour per VM, used only in the Resources view (charts, swatches); the List stays accent-only
 VM_COLORS = {
-    'HYD-DC1': '#8B9CFF', 'HYD-GW1': '#3DD6C4', 'HYD-CM1': '#FFB35C',
-    'HYD-CLIENT1': '#F0866C', 'HYD-CLIENT2': '#E879F9', 'HYD-CLIENT3': '#C5D86D', 'HYD-CLIENT4': '#FF6FAE',
+    'HYD-DC1': '#73A0FF', 'HYD-GW1': '#36E2C6', 'HYD-CM1': '#FFBE60',
+    'HYD-CLIENT1': '#FF7D8B', 'HYD-CLIENT2': '#E878FF', 'HYD-CLIENT3': '#C5D86D', 'HYD-CLIENT4': '#FF6FAE',
     'HYD-Client5': '#D6B38A', 'HYD-Client6': '#94A3B8',
 }
 
@@ -1157,277 +1208,479 @@ class StatusGlyph(Gtk.DrawingArea):
         return False
 
 
+TIMELINE_BG = rgb('#101119')
+TIMELINE_TOTAL = rgb('#AC8DFF')
+TIMELINE_OTHER = rgb('#63D3FA')
+
+
+def timeline_points(points, tolerance=.15):
+    """Reduce subpixel line geometry while keeping every extremum and plateau edge.
+
+    Raw histories and tooltip observations remain untouched. The display tolerance
+    is in logical pixels, not data units; thin only monotone runs between observed
+    extrema, retaining endpoints and visible bends rather than bucket averages.
+    """
+    if len(points) <= 2:
+        return points
+    anchors = [0]
+    for i in range(1, len(points) - 1):
+        before, after = points[i][1] - points[i - 1][1], points[i + 1][1] - points[i][1]
+        if before * after < 0 or (before == 0) != (after == 0):
+            anchors.append(i)
+    anchors.append(len(points) - 1)
+    keep = set(anchors)
+    work = list(zip(anchors, anchors[1:]))
+    while work:
+        first, last = work.pop()
+        if last - first <= 1:
+            continue
+        x0, y0 = points[first]
+        x1, y1 = points[last]
+        slope = (y1 - y0) / (x1 - x0)
+        distance, index = max((abs(points[i][1] - y0 - (points[i][0] - x0) * slope), i)
+                              for i in range(first + 1, last))
+        if distance > tolerance:
+            keep.add(index)
+            work.extend(((first, index), (index, last)))
+    return [points[i] for i in sorted(keep)]
+
+
+def timeline_controls(points):
+    """Shape-preserving cubic controls. Each segment stays between its observed endpoints.
+
+    Use weighted harmonic tangents for uneven timestamps, then the Fritsch-Carlson
+    monotonicity bound. A spike remains an observed extremum rather than becoming a
+    rounded average or a Catmull-Rom overshoot. Points must have increasing x values.
+    """
+    if len(points) < 2:
+        return []
+    widths = [b[0] - a[0] for a, b in zip(points, points[1:])]
+    if any(dx <= 0 for dx in widths):
+        raise ValueError('Activity points must have increasing timestamps')
+    slopes = [(b[1] - a[1]) / dx for a, b, dx in zip(points, points[1:], widths)]
+    tangents = [slopes[0]]
+    for i in range(1, len(points) - 1):
+        before, after = slopes[i - 1], slopes[i]
+        if before * after <= 0:
+            tangents.append(0.0)
+        else:
+            w1, w2 = 2 * widths[i] + widths[i - 1], widths[i] + 2 * widths[i - 1]
+            tangents.append((w1 + w2) / (w1 / before + w2 / after))
+    tangents.append(slopes[-1])
+    for i, slope in enumerate(slopes):
+        if slope == 0:
+            tangents[i] = tangents[i + 1] = 0.0
+            continue
+        a, b = tangents[i] / slope, tangents[i + 1] / slope
+        norm = a * a + b * b
+        if norm > 9:
+            scale = 3 / math.sqrt(norm)
+            tangents[i], tangents[i + 1] = scale * a * slope, scale * b * slope
+    return [(a[0] + dx / 3, a[1] + tangents[i] * dx / 3,
+             b[0] - dx / 3, b[1] - tangents[i + 1] * dx / 3, b[0], b[1])
+            for i, (a, b, dx) in enumerate(zip(points, points[1:], widths))]
+
+
+def timeline_runs(times, values, gap):
+    """Indices of contiguous finite observations; never connect a missing sample or gap."""
+    runs, run = [], []
+    previous = None
+    for i, (stamp, value) in enumerate(zip(times, values)):
+        valid = (isinstance(stamp, (int, float)) and math.isfinite(stamp)
+                 and isinstance(value, (int, float)) and math.isfinite(value) and value >= 0)
+        if not valid or (previous is not None and (stamp <= previous or stamp - previous > gap)):
+            if run:
+                runs.append(run)
+            run = []
+        if valid:
+            run.append(i)
+            previous = stamp
+        else:
+            previous = None
+    if run:
+        runs.append(run)
+    return runs
+
+
+def timeline_age(seconds):
+    seconds = max(0, round(seconds))
+    if not seconds:
+        return 'Now'
+    minutes, seconds = divmod(seconds, 60)
+    return (f'{minutes} min' + (f' {seconds} s' if seconds else '') if minutes else f'{seconds} s') + ' ago'
+
+
+def timeline_sum(values):
+    """A missing component makes the aggregate unavailable rather than an invented zero."""
+    values = tuple(values)
+    if any(not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 for value in values):
+        return None
+    return sum(values)
+
+
 class Timeline(Gtk.DrawingArea):
-    """The Activity chart: stacked per-VM areas (CPU, memory) or mirrored read/write (disk,
-    network), with a hover cursor and tooltip. Data comes from ResourceView's history."""
+    """Neon Activity traces over raw observations, with cached drawing and sample tooltips.
+
+    CPU uses independently measured host utilization; memory uses host memory history.
+    Disk/network remain directional and their aggregate is explicitly the lab total.
+    There is no animation timer or additional telemetry polling.
+    """
     def __init__(self, view):
         super().__init__()
         self.view = view
-        self.set_size_request(-1, 200)
+        self.set_size_request(-1, 260)
         self.set_hexpand(True)
         self.mode, self.minutes = 'cpu', 5
         self.hover_x = None
         self.ymax_shown = None
+        self._surface = self._cache_key = self._plot = None
+        self._times = []
         self.add_events(Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
         self.connect('motion-notify-event', lambda _w, e: self._hover(e.x))
         self.connect('leave-notify-event', lambda *_: self._hover(None))
         self.connect('draw', self._draw)
+        self.get_accessible().set_name('Activity history')
 
     def _hover(self, x):
-        self.hover_x = x
-        self.queue_draw()
+        if x != self.hover_x:
+            self.hover_x = x
+            self.queue_draw()
 
     def series(self):
-        """(layers [(name, rgb, values)], extra, n, kind) for the current mode and range."""
-        v = self.view
-        n = v.HIST if self.minutes == 15 else v.HIST // 3
-        names = [nm for nm in v.names if v.ever_ran(nm, n)]
+        """(VM layers, host/other series, kind), containing only recorded raw samples.
 
-        def get(name, key, agg='mean'):
-            return v.window(v.hist[name][key], n, agg)
+        Keep the full 450-point 15-minute history. Bucket means hid CPU/memory peaks
+        and bucket maxima combined I/O peaks from different timestamps.
+        """
+        v = self.view
+        requested = v.HIST if self.minutes == 15 else v.HIST // 3
+        count = min(requested, max(0, v.samples), len(v.hhist['host']))
+        stamps = list(getattr(v, 'sample_times', []))
+        if stamps:
+            count = min(count, len(stamps))
+            stamps = stamps[-count:] if count else []
+            indices = []
+            previous = None
+            for i, stamp in enumerate(stamps):
+                if not isinstance(stamp, (int, float)) or not math.isfinite(stamp):
+                    indices, previous = [], None
+                    continue
+                if previous is not None:
+                    if stamp < previous:
+                        # A clock regression starts a new history segment. Do not
+                        # sort observations or connect across different epochs.
+                        indices = []
+                    elif stamp == previous:
+                        indices.pop()  # one timestamp: keep its newest reading
+                indices.append(i)
+                previous = stamp
+            if indices:
+                cutoff = stamps[indices[-1]] - self.minutes * 60
+                indices = [i for i in indices if stamps[i] >= cutoff]
+            self._times = [stamps[i] for i in indices]
+        else:
+            indices = list(range(count))
+            self._times = [(i - count + 1) * v.HIST_STEP for i in range(count)]
+        # Keep source offsets until all histories have been sliced. Filtering only
+        # drawing coordinates leaves expired spikes in totals and scale selection.
+        record_count, count = count, len(indices)
+        names = [name for name in v.names if v.ever_ran(name, requested)]
+
+        def get(dq):
+            values = list(dq)[-record_count:] if record_count else []
+            values = [None] * (record_count - len(values)) + values
+            return [values[i] for i in indices]
+
         if self.mode == 'cpu':
-            return ([(nm, vm_rgb(nm), get(nm, 'cpu')) for nm in names],
-                    {'host': v.window(v.hhist['host'], n, 'mean')}, 'pct')
+            layers = [(name, vm_rgb(name), get(v.hist[name]['cpu'])) for name in names]
+            host = get(v.hhist['host'])
+            lab = ([timeline_sum(values) for values in zip(*(layer[2] for layer in layers))]
+                   if layers else [0.0] * count)
+            other = [max(0.0, value - lab[i]) if timeline_sum((value, lab[i])) is not None else None
+                     for i, value in enumerate(host)]
+            return layers, {'host': host, 'other': other}, 'pct'
         if self.mode == 'mem':
-            return ([(nm, vm_rgb(nm), get(nm, 'rss')) for nm in names],
-                    {'other': v.window(v.hhist['other_mem'], n, 'mean')}, 'bytes')
-        up, down = ('rd', 'wr') if self.mode == 'disk' else ('rx', 'tx')
-        return ([(nm, vm_rgb(nm), get(nm, up, 'max'), get(nm, down, 'max')) for nm in names], {}, 'mirror')
+            layers = [(name, vm_rgb(name), get(v.hist[name]['rss'])) for name in names]
+            other = get(v.hhist['other_mem'])
+            # Older callers can omit host_mem; label this compatible-component sum
+            # as derived. The application records independent host memory samples.
+            host = get(v.hhist['host_mem']) if 'host_mem' in v.hhist else [
+                timeline_sum(values) for values in zip(other, *(layer[2] for layer in layers))]
+            return layers, {'host': host, 'other': other, 'derived': 'host_mem' not in v.hhist}, 'bytes'
+        first, second = ('rd', 'wr') if self.mode == 'disk' else ('rx', 'tx')
+        layers = [(name, vm_rgb(name), get(v.hist[name][first]), get(v.hist[name][second])) for name in names]
+        return layers, {'up': ([timeline_sum(values) for values in zip(*(layer[2] for layer in layers))]
+                              if layers else [0.0] * count),
+                        'down': ([timeline_sum(values) for values in zip(*(layer[3] for layer in layers))]
+                                if layers else [0.0] * count)}, 'mirror'
+
+    def _label(self, cr, text, x, y, align='left', color=None, px=11, bold=False):
+        lay = layout(self, text, px, bold)
+        width, height = lay.get_pixel_size()
+        cr.move_to(x - width if align == 'right' else x - width / 2 if align == 'center' else x, y - height / 2)
+        cr.set_source_rgb(*(color or rgb('#A3A1B9')))
+        PangoCairo.show_layout(cr, lay)
 
     def _draw(self, _w, cr):
-        w, h = self.get_allocated_width(), self.get_allocated_height()
-        px0, px1, py0, py1 = 48, w - 12, 10, h - 22
-        pw, ph = px1 - px0, py1 - py0
-        layers, extra, kind = self.series()
-        view = self.view
-        hl = view.hover or view.focus
-        n = len(layers[0][2]) if layers else (len(extra.get('host', [])) or 2)
-        n = max(2, n)
-        # history is pre-filled with zeros; draw only what was really sampled, ending at "now"
-        real = min(n, max(2, view.samples // (3 if self.minutes == 15 else 1)))
-        skip = n - real
-        if skip:
-            layers = [(l[0], l[1], *(vals[skip:] for vals in l[2:])) for l in layers]
-            extra = {k: v[skip:] for k, v in extra.items()}
-        full, n = n, real
-
-        def xat(i):
-            return px0 + pw * (i + full - n) / (full - 1)
-
-        axis = (0.48, 0.48, 0.48)
-
-        def label(text, x, y, align='right', color=axis, px=10):
-            lay = layout(self, text, px)
-            tw, th = lay.get_pixel_size()
-            cr.move_to(x - tw if align == 'right' else x - tw / 2 if align == 'center' else x, y - th / 2)
-            cr.set_source_rgb(*color)
-            PangoCairo.show_layout(cr, lay)
-
-        # x labels
-        label(f'−{self.minutes} min', px0, h - 9, 'left')
-        label('now', px1, h - 9, 'right')
-        label(f'−{self.minutes / 2:g} min', px0 + pw / 2, h - 9, 'center')
-
-        def stacked(ymax, fmt):
-            for k in (0.25, 0.5, 0.75, 1):
-                y = py1 - ph * k
-                cr.set_dash([2, 4])
-                cr.move_to(px0, round(y) + 0.5)
-                cr.line_to(px1, round(y) + 0.5)
-                cr.set_source_rgba(1, 1, 1, 0.05)
-                cr.set_line_width(1)
-                cr.stroke()
-                cr.set_dash([])
-                label(fmt(ymax * k), px0 - 8, y)
-            cr.rectangle(px0, py1, pw, 1)
-            cr.set_source_rgba(1, 1, 1, 0.10)
-            cr.fill()
-            base = [0.0] * n
-            tops = []
-            for name, col, vals in layers:
-                top = [b + vv for b, vv in zip(base, vals)]
-                pts_top = [(xat(i), py1 - ph * min(1.0, t / ymax)) for i, t in enumerate(top)]
-                pts_base = [(xat(i), py1 - ph * min(1.0, b / ymax)) for i, b in enumerate(base)]
-                dim = hl and hl != name
-                a = 0.25 if dim else 1.0
-                smooth_path(cr, pts_top)
-                smooth_path(cr, pts_base[::-1], move=False)
-                cr.close_path()
-                g = cairo.LinearGradient(0, py0, 0, py1)
-                g.add_color_stop_rgba(0, *col, (0.8 if hl == name else 0.62) * a)
-                g.add_color_stop_rgba(1, *col, 0.22 * a)
-                cr.set_source(g)
-                cr.fill()
-                smooth_path(cr, pts_top)
-                cr.set_source_rgba(*col, 0.95 * a)
-                cr.set_line_width(1.8 if hl == name else 1.2)
-                cr.set_line_join(cairo.LINE_JOIN_ROUND)
-                cr.stroke()
-                tops.append((name, col, vals, pts_top))
-                base = top
-            return base, tops
-
-        if kind in ('pct', 'bytes'):
-            if kind == 'pct':
-                host = extra['host'] if extra.get('host') else [0.0] * n
-                peak = max(host + [0.0])
-                ymax = min(100.0, max(5.0, nice_ceil(peak * 1.15)))
-                fmt = lambda v: f'{v:g}%'
-            else:
-                ymax = float(view.mem_total or 1)
-                fmt = lambda v: f'{v / GB:.0f} GB'
-            if self.ymax_shown is None or kind != getattr(self, '_kind', None):
-                self.ymax_shown = ymax
-            self.ymax_shown += (ymax - self.ymax_shown) * 0.5
-            self._kind = kind
-            ymax = self.ymax_shown
-            base, tops = stacked(ymax, fmt)
-            if kind == 'pct' and extra.get('host'):
-                # everything else on the host: hatched between the lab stack and the host total
-                host = extra['host']
-                pts_h = [(xat(i), py1 - ph * min(1.0, max(b, v) / ymax)) for i, (b, v) in enumerate(zip(base, host))]
-                pts_b = [(xat(i), py1 - ph * min(1.0, b / ymax)) for i, b in enumerate(base)]
-                smooth_path(cr, pts_h)
-                smooth_path(cr, pts_b[::-1], move=False)
-                cr.close_path()
-                cr.set_source_rgba(1, 1, 1, 0.04)
-                cr.fill_preserve()
-                cr.set_source(hatch())
-                cr.fill()
-                smooth_path(cr, pts_h)
-                cr.set_source_rgba(1, 1, 1, 0.85)
-                cr.set_line_width(1.5)
-                cr.stroke()
-                tops.append(('Host total', (1, 1, 1), host, pts_h))
-            if kind == 'bytes':
-                y = py1 - ph * (1 - view.RESERVE / ymax)
-                cr.set_dash([3, 3])
-                cr.move_to(px0, round(y) + 0.5)
-                cr.line_to(px1, round(y) + 0.5)
-                cr.set_source_rgb(*rgb('#FCE100'))
-                cr.set_line_width(1.5)
-                cr.stroke()
-                cr.set_dash([])
-                label(f'{fmt_bytes(view.RESERVE, 0)} kept free', px1 - 4, y - 9, 'right', rgb('#FCE100'))
-        else:
-            mid = py0 + ph / 2
-            ups = [sum(l[2][i] for l in layers) for i in range(n)] if layers else [0] * n
-            downs = [sum(l[3][i] for l in layers) for i in range(n)] if layers else [0] * n
-            top_u, top_d = max(65536.0, nice_ceil(max(ups) * 1.1)), max(65536.0, nice_ceil(max(downs) * 1.1))
-            cr.rectangle(px0, round(mid) - 0.5, pw, 1)
-            cr.set_source_rgba(1, 1, 1, 0.18)
-            cr.fill()
-            label(fmt_rate(top_u), px0 - 8, py0 + 4)
-            label(fmt_rate(top_d), px0 - 8, py1 - 4)
-            label('0', px0 - 8, mid)
-            tops = []
-            for half, top_v, sign, idx in (('up', top_u, -1, 2), ('down', top_d, 1, 3)):
-                base = [0.0] * n
-                for layer in layers:
-                    name, col, vals = layer[0], layer[1], layer[idx]
-                    top = [b + vv for b, vv in zip(base, vals)]
-                    pts_t = [(xat(i), mid + sign * (ph / 2 - 2) * min(1.0, t / top_v)) for i, t in enumerate(top)]
-                    pts_b = [(xat(i), mid + sign * (ph / 2 - 2) * min(1.0, b / top_v)) for i, b in enumerate(base)]
-                    a = 0.25 if hl and hl != name else 1.0
-                    smooth_path(cr, pts_t)
-                    smooth_path(cr, pts_b[::-1], move=False)
-                    cr.close_path()
-                    g = cairo.LinearGradient(0, mid, 0, mid + sign * ph / 2)
-                    g.add_color_stop_rgba(0, *col, 0.08 * a)
-                    g.add_color_stop_rgba(1, *col, 0.55 * a)
-                    cr.set_source(g)
-                    cr.fill()
-                    smooth_path(cr, pts_t)
-                    cr.set_source_rgba(*col, 0.9 * a)
-                    cr.set_line_width(1.8 if hl == name else 1.1)
-                    cr.stroke()
-                    if half == 'up':
-                        tops.append((name, col, [u + d for u, d in zip(layer[2], layer[3])], pts_t))
-                    base = top
-            cap = 'Read ▲  Write ▼' if self.mode == 'disk' else 'Received ▲  Sent ▼'
-            label(cap, px1 - 4, py0 + 6, 'right')
-            # peak marker
-            best = max(((v, i, l[0], l[1]) for l in layers for i, v in enumerate(l[2])), default=None)
-            if best and best[0] > 1024:
-                v, i, name, col = best
-                x = xat(i)
-                y = mid - (ph / 2 - 2) * min(1.0, v / top_u)
-                cr.arc(x, y, 3, 0, 2 * math.pi)
-                cr.set_source_rgb(*col)
-                cr.fill()
-                label(f'{fmt_rate(v)} · {short(name)}', min(px1 - 4, x + 6), max(py0 + 8, y - 8), 'left' if x < px0 + pw * 0.7 else 'right', col)
-
-        # left-edge fade into the card
-        g = cairo.LinearGradient(px0, 0, px0 + 40, 0)
-        g.add_color_stop_rgba(0, 0.169, 0.169, 0.169, 1)
-        g.add_color_stop_rgba(1, 0.169, 0.169, 0.169, 0)
-        cr.rectangle(px0, py0 - 4, 40, ph + 6)
-        cr.set_source(g)
-        cr.fill()
-        # "now" dot on the top layer
-        if tops:
-            x, y = tops[-1][3][-1]
-            col = tops[-1][1]
-            cr.arc(x, y, 7, 0, 2 * math.pi)
-            cr.set_source_rgba(*col, 0.2)
-            cr.fill()
-            cr.arc(x, y, 3, 0, 2 * math.pi)
-            cr.set_source_rgba(*col, 1)
-            cr.fill()
-        if self.hover_x is not None and px0 <= self.hover_x <= px1 and tops:
-            self._tooltip(cr, tops, n, full, xat, px0, pw, py0, py1, w, kind)
+        width, height = self.get_allocated_width(), self.get_allocated_height()
+        if width < 150 or height < 100:
+            return False
+        scale = max(1, self.get_scale_factor())
+        key = (width, height, scale, self.mode, self.minutes, self.view.samples,
+               self.view.hover, self.view.focus, self.view.mem_total, self.ymax_shown)
+        if self._surface is None or key != self._cache_key:
+            if (self._surface is None or self._surface.get_width() != width * scale
+                    or self._surface.get_height() != height * scale):
+                self._surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width * scale, height * scale)
+            self._surface.set_device_scale(scale, scale)
+            self._paint(cairo.Context(self._surface), width, height)
+            # _paint chooses a stable rounded scale; include the chosen value.
+            self._cache_key = (*key[:-1], self.ymax_shown)
+        cr.set_source_surface(self._surface, 0, 0)
+        cr.paint()
+        if self.hover_x is not None and self._plot:
+            self._tooltip(cr, width)
         return False
 
-    def _tooltip(self, cr, tops, n, full, xat, px0, pw, py0, py1, w, kind):
-        i = max(0, min(n - 1, round((self.hover_x - px0) / pw * (full - 1)) - (full - n)))
-        x = xat(i)
-        cr.rectangle(round(x) - 0.5, py0, 1, py1 - py0)
-        cr.set_source_rgba(1, 1, 1, 0.28)
-        cr.fill()
-        rows = []
-        for name, col, vals, pts in tops:
-            cr.arc(pts[i][0], pts[i][1], 3.5, 0, 2 * math.pi)
-            cr.set_source_rgb(*col)
-            cr.fill_preserve()
-            cr.set_source_rgb(0.169, 0.169, 0.169)
-            cr.set_line_width(1.5)
+    def _paint(self, cr, width, height):
+        cr.set_source_rgb(*TIMELINE_BG)
+        cr.paint()
+        left, right, top, bottom = 76, width - 14, 30, height - 29
+        pw, ph = right - left, bottom - top
+        layers, extra, kind = self.series()
+        times = self._times
+        self._plot = None
+        label = lambda text, x, y, **kw: self._label(cr, text, x, y, **kw)
+        unit = 'Host CPU (%)' if kind == 'pct' else 'Host memory (GB)' if kind == 'bytes' else 'Disk (bytes/s)' if self.mode == 'disk' else 'Network (bytes/s)'
+        label(unit, left, 12)
+        if not times:
+            label('Collecting activity history', (left + right) / 2, (top + bottom) / 2,
+                  align='center', color=rgb('#C8C4DA'), px=12)
+            return
+
+        duration = max(0, times[-1] - times[0])
+        requested = self.minutes * 60
+        span = min(requested, max(30, math.ceil(duration / 30) * 30))
+        end, start = times[-1], times[-1] - span
+        xat = lambda i: left + pw * (times[i] - start) / span
+        positions = [xat(i) for i in range(len(times))]
+        if duration < requested - self.view.HIST_STEP:
+            label('Collecting history · ' + timeline_age(duration).removesuffix(' ago').lower(),
+                  right, 12, align='right', color=rgb('#8F8DA7'))
+        elif kind == 'bytes':
+            label(f'{self.view.mem_total / GB:g} GB installed', right, 12, align='right')
+        elif kind == 'mirror':
+            label('Read ↑  Write ↓' if self.mode == 'disk' else 'Received ↑  Sent ↓', right, 12, align='right')
+        for elapsed, x, align in ((span, left, 'left'), (span / 2, left + pw / 2, 'center'), (0, right, 'right')):
+            label(timeline_age(elapsed), x, height - 10, align=align)
+
+        valid = lambda values: [value for value in values if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0]
+        values, valid_series = [], {}
+        sides = [side for layer in layers for side in layer[2:]]
+        sides.extend(side for side in extra.values() if isinstance(side, list))
+        for side in sides:
+            finite = valid(side)
+            valid_series[id(side)] = len(finite) == len(side)
+            values.extend(finite)
+        peak = max(values, default=0)
+        if kind == 'bytes':
+            ymax = 2 ** math.ceil(math.log2(max(1, self.view.mem_total / GB, peak / GB))) * GB
+            step = ymax / 4
+            format_axis = lambda value: f'{value / GB:g}'
+        elif kind == 'pct':
+            target = max(5, peak * 1.06)
+            step = nice_ceil(target / 4)
+            ymax = math.ceil(target / step) * step
+            if peak <= 100:
+                ymax = min(100, ymax)
+            format_axis = lambda value: f'{value:g}'
+        else:
+            unit_value = 1024 ** max(0, int(math.log(max(1, peak), 1024)))
+            step = nice_ceil(max(1, peak / unit_value) * 1.06 / 2) * unit_value
+            ymax = max(step * 2, math.ceil(peak / step) * step)
+            format_axis = fmt_rate
+        # Grow immediately so a spike is never clipped. Shrink only by a large
+        # margin and keep tick values round instead of easing the numeric scale.
+        if self.ymax_shown and getattr(self, '_kind', None) == kind:
+            if ymax <= self.ymax_shown and ymax >= self.ymax_shown / 2:
+                ymax = self.ymax_shown
+                step = self._axis_step
+        self.ymax_shown, self._kind, self._axis_step = ymax, kind, step
+        middle = (top + bottom) / 2 if kind == 'mirror' else bottom
+        amplitude = ph / 2 if kind == 'mirror' else ph
+        yval = lambda value, sign=-1: middle + sign * amplitude * value / ymax
+
+        def grid(y, caption):
+            cr.move_to(left, round(y) + .5)
+            cr.line_to(right, round(y) + .5)
+            cr.set_source_rgb(*rgb('#272631'))
+            cr.set_line_width(1)
             cr.stroke()
-            v = vals[i]
-            text = f'{v:.1f}%' if kind == 'pct' else fmt_bytes(v) if kind == 'bytes' else fmt_rate(v)
-            rows.append((short(name), col, text, v))
-        rows = sorted(rows, key=lambda r: -r[3])[:7]
-        step = self.view.HIST_STEP * (3 if self.minutes == 15 else 1)
-        ago = (n - 1 - i) * step
-        head = 'now' if ago < 1 else f'−{int(ago // 60)} m {int(ago % 60):02d} s'
-        lays = [(layout(self, nm, 11), col, layout(self, t, 11, bold=True)) for nm, col, t, _v in rows]
-        head_l = layout(self, head, 10)
-        bw = max([head_l.get_pixel_size()[0]] + [a.get_pixel_size()[0] + b.get_pixel_size()[0] + 36 for a, _c, b in lays]) + 20
-        bh = 26 + 17 * len(lays)
-        bx = x + 12 if x + 12 + bw < w - 4 else x - 12 - bw
-        by = py0 + 4
-        rrect(cr, bx + 2, by + 4, bw, bh, 8)
-        cr.set_source_rgba(0, 0, 0, 0.35)
-        cr.fill()
-        rrect(cr, bx, by, bw, bh, 8)
-        cr.set_source_rgba(0.173, 0.173, 0.173, 0.96)
-        cr.fill_preserve()
-        cr.set_source_rgba(1, 1, 1, 0.10)
+            label(caption, left - 10, y, align='right')
+
+        if kind == 'mirror':
+            for value in (0, ymax / 2, ymax):
+                grid(yval(value), format_axis(value))
+                if value:
+                    grid(yval(value, 1), format_axis(value))
+        else:
+            for i in range(round(ymax / step) + 1):
+                value = i * step
+                grid(yval(value), format_axis(value))
+        rows, traces = [], []
+        host_name = 'Host total (derived)' if extra.get('derived') else 'Host total'
+        if kind == 'mirror':
+            rows.append(('Lab total', TIMELINE_TOTAL, extra['up'], extra['down']))
+            traces.extend([('Lab total', TIMELINE_TOTAL, extra['up'], -1, True),
+                           ('Lab total', TIMELINE_TOTAL, extra['down'], 1, True)])
+        else:
+            rows.append((host_name, TIMELINE_TOTAL, extra['host'], None))
+            traces.append((host_name, TIMELINE_TOTAL, extra['host'], -1, True))
+        for layer in layers:
+            name, color = layer[:2]
+            rows.append((name, color, layer[2], layer[3] if kind == 'mirror' else None))
+            traces.append((name, color, layer[2], -1, False))
+            if kind == 'mirror':
+                traces.append((name, color, layer[3], 1, False))
+        if kind != 'mirror':
+            name = 'Linux & apps' if kind == 'bytes' else 'Other host'
+            rows.append((name, TIMELINE_OTHER, extra['other'], None))
+            traces.append((name, TIMELINE_OTHER, extra['other'], -1, False))
+        selected = self.view.hover or self.view.focus
+        # Timestamp gaps are identical for all aligned traces. Validate them once;
+        # only a trace with missing/invalid values needs its own narrower runs.
+        time_runs = timeline_runs(times, [0.0] * len(times), self.view.HIST_STEP * 3)
+        cr.save()
+        cr.rectangle(left, top - 1, pw, ph + 2)
+        cr.clip()
+        # Fill the total only, keeping component lines distinct and avoiding the
+        # visual implication that the host total is another additive component.
+        for name, color, series, sign, total in traces:
+            alpha = .24 if selected and not total and selected != name and not (selected == 'Other' and name in ('Other host', 'Linux & apps')) else 1.0
+            runs = time_runs if valid_series[id(series)] else timeline_runs(times, series, self.view.HIST_STEP * 3)
+            for run in runs:
+                points = timeline_points([(positions[i], yval(series[i], sign)) for i in run])
+                if len(points) == 1:
+                    cr.arc(*points[0], 2.5, 0, 2 * math.pi)
+                    cr.set_source_rgba(*color, alpha)
+                    cr.fill()
+                    continue
+                cr.new_path()
+                cr.move_to(*points[0])
+                for controls in timeline_controls(points):
+                    cr.curve_to(*controls)
+                path = cr.copy_path()
+                if total:
+                    cr.line_to(points[-1][0], middle)
+                    cr.line_to(points[0][0], middle)
+                    cr.close_path()
+                    gradient = cairo.LinearGradient(0, yval(ymax, sign), 0, middle)
+                    gradient.add_color_stop_rgba(0, *color, .18)
+                    gradient.add_color_stop_rgba(1, *color, .015)
+                    cr.set_source(gradient)
+                    cr.fill()
+                else:
+                    cr.new_path()
+                # Layered strokes are considerably cheaper than a full-plot blur.
+                cr.set_line_cap(cairo.LINE_CAP_ROUND)
+                cr.set_line_join(cairo.LINE_JOIN_ROUND)
+                for stroke_width, opacity in ((5.0, .15), (2.0 if total else 1.75, .95)):
+                    cr.new_path()
+                    cr.append_path(path)
+                    cr.set_line_width(stroke_width)
+                    cr.set_source_rgba(*color, opacity * alpha)
+                    cr.stroke()
+        if kind == 'bytes' and self.view.mem_total:
+            for limit, color, dash in ((self.view.mem_total, rgb('#8F8DA7'), [3, 4]),
+                                       (max(0, self.view.mem_total - self.view.RESERVE), rgb('#D8AF68'), [2, 5])):
+                cr.move_to(left, yval(limit))
+                cr.line_to(right, yval(limit))
+                cr.set_source_rgba(*color, .55)
+                cr.set_dash(dash)
+                cr.set_line_width(1)
+                cr.stroke()
+            cr.set_dash([])
+        cr.restore()
+        if kind == 'bytes':
+            label(f'{fmt_bytes(self.view.RESERVE, 0)} reserve', right - 4,
+                  min(bottom - 8, max(top + 9, yval(max(0, self.view.mem_total - self.view.RESERVE)) + 10)),
+                  align='right', color=rgb('#D8AF68'))
+        self._plot = {'times': times[:], 'positions': positions, 'rows': rows, 'kind': kind,
+                      'left': left, 'right': right, 'top': top, 'bottom': bottom, 'yval': yval}
+
+    def _tooltip(self, cr, width):
+        plot = self._plot
+        if not plot['left'] <= self.hover_x <= plot['right'] or not plot['times']:
+            return
+        # Snap every marker and the guide to the same recorded sample. No
+        # interpolated tooltip readings and no phantom points before history.
+        positions, times = plot['positions'], plot['times']
+        if self.hover_x < positions[0] - 5 or self.hover_x > positions[-1] + 5:
+            return
+        i = min(range(len(positions)), key=lambda index: abs(positions[index] - self.hover_x))
+        if abs(positions[i] - self.hover_x) > max(7, (plot['right'] - plot['left']) * self.view.HIST_STEP * 1.5 / max(30, times[-1] - times[0])):
+            return
+        x = positions[i]
+        cr.move_to(round(x) + .5, plot['top'])
+        cr.line_to(round(x) + .5, plot['bottom'])
+        cr.set_source_rgba(*rgb('#B6AECF'), .45)
         cr.set_line_width(1)
         cr.stroke()
-        cr.move_to(bx + 10, by + 7)
-        cr.set_source_rgb(0.6, 0.6, 0.6)
-        PangoCairo.show_layout(cr, head_l)
-        for k, (nl, col, vl) in enumerate(lays):
-            y = by + 25 + 17 * k
-            cr.arc(bx + 13, y + 7, 3, 0, 2 * math.pi)
-            cr.set_source_rgb(*col)
+        rows = []
+        for name, color, first, second in plot['rows']:
+            value = first[i]
+            if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                continue
+            for sample, sign in ((value, -1), (second[i] if second is not None else None, 1)):
+                if sample is None or not isinstance(sample, (int, float)) or not math.isfinite(sample) or sample < 0:
+                    continue
+                cr.arc(x, plot['yval'](sample, sign), 3, 0, 2 * math.pi)
+                cr.set_source_rgb(*color)
+                cr.fill_preserve()
+                cr.set_source_rgb(*TIMELINE_BG)
+                cr.set_line_width(1)
+                cr.stroke()
+            if second is not None:
+                other = second[i]
+                text = f'{fmt_rate(value)} / {fmt_rate(other)}' if isinstance(other, (int, float)) and math.isfinite(other) else f'{fmt_rate(value)} / unavailable'
+            else:
+                text = f'{value:.1f}%' if plot['kind'] == 'pct' else fmt_bytes(value)
+            rows.append((short(name), color, text))
+        if not rows:
+            return
+        head = timeline_age(times[-1] - times[i])
+        if plot['kind'] == 'mirror':
+            head += ' · ' + ('read / write' if self.mode == 'disk' else 'received / sent')
+        header = layout(self, head, 11)
+        labels = [(layout(self, name, 11), color, layout(self, text, 11, True)) for name, color, text in rows]
+        box_width = min(width - 16, max([header.get_pixel_size()[0]] +
+                                      [name.get_pixel_size()[0] + value.get_pixel_size()[0] + 34 for name, _, value in labels]) + 22)
+        box_height = 29 + 18 * len(labels)
+        bx = min(width - box_width - 8, max(8, x + 14 if x + box_width + 22 < width else x - box_width - 14))
+        by = max(4, min(plot['top'] + 2, self.get_allocated_height() - box_height - 4))
+        rrect(cr, bx, by, box_width, box_height, 8)
+        cr.set_source_rgb(*rgb('#1C1B28'))
+        cr.fill_preserve()
+        cr.set_source_rgb(*rgb('#383347'))
+        cr.set_line_width(1)
+        cr.stroke()
+        cr.move_to(bx + 11, by + 8)
+        cr.set_source_rgb(*rgb('#BBB5CF'))
+        PangoCairo.show_layout(cr, header)
+        for index, (name, color, value) in enumerate(labels):
+            y = by + 28 + 18 * index
+            cr.arc(bx + 13, y + 6, 3, 0, 2 * math.pi)
+            cr.set_source_rgb(*color)
             cr.fill()
-            cr.move_to(bx + 22, y)
-            cr.set_source_rgb(0.85, 0.85, 0.85)
-            PangoCairo.show_layout(cr, nl)
-            cr.move_to(bx + bw - 10 - vl.get_pixel_size()[0], y)
-            cr.set_source_rgb(1, 1, 1)
-            PangoCairo.show_layout(cr, vl)
+            available = max(20, box_width - value.get_pixel_size()[0] - 43)
+            name.set_width(int(available * Pango.SCALE))
+            name.set_ellipsize(Pango.EllipsizeMode.END)
+            cr.move_to(bx + 23, y)
+            cr.set_source_rgb(*rgb('#D2CEDD'))
+            PangoCairo.show_layout(cr, name)
+            cr.move_to(bx + box_width - value.get_pixel_size()[0] - 10, y)
+            cr.set_source_rgb(*rgb('#F1EFF8'))
+            PangoCairo.show_layout(cr, value)
 
 
 class RamBar(Gtk.DrawingArea):
@@ -1733,9 +1986,8 @@ def set_text(label, text, markup=False):
 
 
 class VmRow(Gtk.EventBox):
-    """A VM card in the List: identity, live CPU / memory / I/O (or a summary when it's off),
-    power buttons, a facts strip (addresses, signed in, uptime, C:, checkpoints), warning chips,
-    and an expandable detail panel."""
+    """A compact VM row with aligned metrics and actions. Warning chips stay visible;
+    the remembered expander contains the facts strip and full guest details."""
     def __init__(self, app, dom):
         super().__init__(visible_window=False)  # a window of its own, so clicks on the card reach it
         self.card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -1758,75 +2010,96 @@ class VmRow(Gtk.EventBox):
         self.capacity = None  # virtual disk size
         self._xml_tick = 0
 
-        # Row A
-        top = Gtk.Box(spacing=12)
+        # Shared column widths keep metrics/actions aligned across every VM. The
+        # identity column takes the remaining space and can ellipsize its role.
+        top = Gtk.Grid(column_spacing=12)
+        top.set_size_request(-1, 54)
         self.card.pack_start(top, False, False, 0)
-        self.icon = Gtk.Image.new_from_pixbuf(tile_pixbuf(kind, False))
+        self.icon = Gtk.Image.new_from_pixbuf(tile_pixbuf(kind, False, size=32))
         self.icon.set_valign(Gtk.Align.CENTER)
-        top.pack_start(self.icon, False, False, 0)
-        ident = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1, valign=Gtk.Align.CENTER)
+        top.attach(self.icon, 0, 0, 1, 1)
+        ident = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
+                        valign=Gtk.Align.CENTER, hexpand=True)
+        ident.set_size_request(180, -1)
         line1 = Gtk.Box(spacing=8)
         line1.pack_start(styled(Gtk.Label(label=short(self.name), xalign=0), 'vm-name'), False, False, 0)
         self.pill = styled(Gtk.Label(valign=Gtk.Align.CENTER), 'pill')
         line1.pack_start(self.pill, False, False, 0)
-        self.os_chip = styled(Gtk.Label(valign=Gtk.Align.CENTER, no_show_all=True), 'os-chip')
-        line1.pack_start(self.os_chip, False, False, 0)
         ident.pack_start(line1, False, False, 0)
-        ident.pack_start(styled(Gtk.Label(label=role, xalign=0, ellipsize=Pango.EllipsizeMode.END), 'vm-role'),
-                         False, False, 0)
-        top.pack_start(ident, True, True, 0)
+        role_label = styled(Gtk.Label(label=role, xalign=0, max_width_chars=32,
+                                      ellipsize=Pango.EllipsizeMode.END), 'vm-role')
+        role_label.set_tooltip_text(role)
+        ident.pack_start(role_label, False, False, 0)
+        self.os_chip = styled(Gtk.Label(valign=Gtk.Align.CENTER, halign=Gtk.Align.START,
+                                        no_show_all=True), 'os-chip')
+        ident.pack_start(self.os_chip, False, False, 0)
+        top.attach(ident, 1, 0, 1, 1)
 
         self.metrics = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE, transition_duration=150,
                                  valign=Gtk.Align.CENTER)
-        self.metrics.set_size_request(312, -1)
-        live = Gtk.Box(spacing=12, homogeneous=True)
-        self.spark = Sparkline(w=96, h=18, n=48)
+        self.metrics.set_size_request(310, -1)
+        live = Gtk.Grid(column_spacing=14)
+        self.spark = Sparkline(w=72, h=14, n=48)
         self.cpu_val = styled(Gtk.Label(xalign=0), 'mini-val')
-        live.pack_start(mini_stat('CPU', self.cpu_val, self.spark), True, True, 0)
-        self.mem_bar = Meter(4, 96)
+        cpu_cell = mini_stat('CPU', self.cpu_val, self.spark)
+        cpu_cell.set_size_request(72, -1)
+        live.attach(cpu_cell, 0, 0, 1, 1)
         self.mem_val = styled(Gtk.Label(xalign=0), 'mini-val')
-        live.pack_start(mini_stat('Memory', self.mem_val, self.mem_bar), True, True, 0)
+        self.mem_assigned = styled(Gtk.Label(xalign=0), 'mini-note')
+        self.mem_val.set_tooltip_text('Resident RAM used by the VM process on the host, including QEMU overhead.')
+        self.mem_assigned.set_tooltip_text('Configured guest RAM. This is separate from host process memory.')
+        memory_cell = mini_stat('Host RAM', self.mem_val, self.mem_assigned)
+        memory_cell.set_size_request(100, -1)
+        live.attach(memory_cell, 1, 0, 1, 1)
         io = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.net_val = styled(Gtk.Label(xalign=0), 'stat')
         self.disk_val = styled(Gtk.Label(xalign=0), 'stat')
+        self.net_val.set_tooltip_text('Network receive + transmit rate.')
+        self.disk_val.set_tooltip_text('Disk read + write rate.')
         io.pack_start(self.net_val, False, False, 0)
         io.pack_start(self.disk_val, False, False, 0)
-        live.pack_start(mini_stat('I/O', io), True, True, 0)
+        io_cell = mini_stat('I/O', io)
+        io_cell.set_size_request(110, -1)
+        live.attach(io_cell, 2, 0, 1, 1)
         self.metrics.add_named(live, 'live')
         off = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1, halign=Gtk.Align.END, valign=Gtk.Align.CENTER)
-        self.off_sum = styled(Gtk.Label(xalign=1), 'off-sum')
-        self.off_sub = styled(Gtk.Label(xalign=1), 'off-sub')
+        self.off_sum = styled(Gtk.Label(xalign=1, max_width_chars=36,
+                                        ellipsize=Pango.EllipsizeMode.END), 'off-sum')
+        self.off_sub = styled(Gtk.Label(xalign=1, max_width_chars=42,
+                                        ellipsize=Pango.EllipsizeMode.END), 'off-sub')
+        for label in (self.off_sum, self.off_sub):
+            label.connect('notify::label', lambda w, _p: w.set_tooltip_text(w.get_text()))
         off.pack_start(self.off_sum, False, False, 0)
         off.pack_start(self.off_sub, False, False, 0)
         self.metrics.add_named(off, 'off')
-        top.pack_start(self.metrics, False, False, 6)
+        top.attach(self.metrics, 2, 0, 1, 1)
 
         self.power = icon_button('media-playback-start-symbolic', 'Start', self.toggle_power)
-        self.connect_btn = text_button('Connect', 'subtle', lambda: app.open_console(self.name))
+        self.connect_btn = text_button('Connect', 'accent', lambda: app.open_console(self.name))
         self.more = icon_button('view-more-symbolic', 'More')
         self.more.connect('clicked', lambda *_: self.show_menu())
         self.chevron = icon_button('pan-down-symbolic', 'Details', lambda: self.set_expanded(not self.rev.get_reveal_child()))
         styled(self.chevron, 'chevron')
+        actions = Gtk.Box(spacing=4, valign=Gtk.Align.CENTER)
         for wdg in (self.power, self.connect_btn, self.more, self.chevron):
-            top.pack_start(wdg, False, False, 0)
+            actions.pack_start(wdg, False, False, 0)
+        top.attach(actions, 3, 0, 1, 1)
 
         # Facts strip
         self.facts_box = styled(Gtk.Box(spacing=0), 'facts')
-        self.card.pack_start(self.facts_box, False, False, 0)
         self.f_addr = self._fact('Address', hexpand=True, markup=True)
-        self.f_user = self._fact('Signed in', 140)
-        self.f_up = self._fact('Uptime', 96)
+        self.f_user = self._fact('Signed in', 120)
+        self.f_up = self._fact('Uptime', 80)
         cbox = Gtk.Box(spacing=8)
         self.c_bar = Meter(4, 56)
         self.c_val = styled(Gtk.Label(xalign=0), 'fact-val')
         cbox.pack_start(self.c_bar, False, False, 0)
         cbox.pack_start(self.c_val, False, False, 0)
-        self.f_c = self._fact('C: drive', 156, widget=cbox)
-        self.f_ck = self._fact('Checkpoints', 104, last=True)
+        self.f_c = self._fact('Guest C: drive', 142, widget=cbox)
+        self.f_ck = self._fact('Checkpoints', 90, last=True)
         self.pxe_note = styled(Gtk.Label(xalign=0, no_show_all=True), 'fact-val', 'muted')
-        self.pxe_note.set_margin_start(52)
+        self.pxe_note.set_margin_start(0)
         self.pxe_note.set_margin_top(8)
-        self.card.pack_start(self.pxe_note, False, False, 0)
 
         # Warning chips
         self.chips = styled(Gtk.Box(spacing=6, no_show_all=True), 'chips')
@@ -1836,8 +2109,12 @@ class VmRow(Gtk.EventBox):
         # Detail panel
         self.rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_DOWN, transition_duration=180)
         self.card.pack_start(self.rev, False, False, 0)
-        detail = styled(Gtk.Box(spacing=24, homogeneous=True), 'vm-detail')
-        self.rev.add(detail)
+        expanded = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.rev.add(expanded)
+        expanded.pack_start(self.facts_box, False, False, 0)
+        expanded.pack_start(self.pxe_note, False, False, 0)
+        detail = styled(Gtk.Box(spacing=20, homogeneous=True), 'vm-detail')
+        expanded.pack_start(detail, False, False, 0)
         self.d_sys = self._detail_col(detail, 'System')
         self.d_net = self._detail_col(detail, 'Network')
         self.d_sto = self._detail_col(detail, 'Storage')
@@ -1854,8 +2131,10 @@ class VmRow(Gtk.EventBox):
     def _fact(self, caption, width=-1, hexpand=False, markup=False, widget=None, last=False):
         cell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1, hexpand=hexpand)
         cell.set_size_request(width, -1)
-        cell.pack_start(styled(Gtk.Label(label=caption.upper(), xalign=0), 'fact-cap'), False, False, 0)
+        caption_label = styled(Gtk.Label(label=caption, xalign=0), 'fact-cap')
+        cell.pack_start(caption_label, False, False, 0)
         val = widget or styled(Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, use_markup=markup), 'fact-val')
+        val.fact_caption = caption_label
         cell.pack_start(val, False, False, 0)
         self.facts_box.pack_start(cell, hexpand, hexpand, 0)
         if not last:
@@ -1893,6 +2172,7 @@ class VmRow(Gtk.EventBox):
     def set_expanded(self, on):
         self.rev.set_reveal_child(on)
         set_icon(self.chevron, 'pan-up-symbolic' if on else 'pan-down-symbolic')
+        self.chevron.set_tooltip_text('Hide details' if on else 'Show details')
         data = load_settings()
         names = set(data.get('expanded', []))
         (names.add if on else names.discard)(self.name)
@@ -1941,7 +2221,8 @@ class VmRow(Gtk.EventBox):
             self.key = key
             set_classes(self.pill, {cls}, ('running', 'off', 'busy', 'paused', 'error', 'saved'))
             self.pill.set_text(text)
-            self.icon.set_from_pixbuf(tile_pixbuf(self.kind, key == libvirt.VIR_DOMAIN_RUNNING, frozen=key == 'saved'))
+            self.icon.set_from_pixbuf(tile_pixbuf(self.kind, key == libvirt.VIR_DOMAIN_RUNNING,
+                                                  frozen=key == 'saved', size=32))
             self.icon.set_tooltip_text('Frozen: memory saved to disk; Resume continues right here' if key == 'saved' else None)
             self._xml_tick = 0
         if state != self.state:
@@ -1969,21 +2250,18 @@ class VmRow(Gtk.EventBox):
         vcpus = self.facts.get('vcpus') or vcpus
         if live:
             r = self.app.resources.rates.get(self.name) if getattr(self.app, 'resources', None) else None
+            set_text(self.mem_assigned, f'{assigned / GB:g} GB assigned')
+            set_text(self.mem_val, f'{r["rss"] / GB:.1f} GB' if r and 'rss' in r else 'Unavailable')
             if r and 'cpu_pct' in r:
                 self.spark.push(r['cpu_pct'])
                 set_text(self.cpu_val, f'{r["cpu_pct"]:.0f}%')
-                set_text(self.mem_val, f'{r["rss"] / GB:.1f} / {assigned / GB:g} GB')
-                scale = assigned * 1.15
-                self.mem_bar.set([(min(r['rss'], assigned) / scale, LAB_RGBA),
-                                  (max(0, r['rss'] - assigned) / scale, (1, 1, 1, 0.35))])
-                set_text(self.net_val, f'↓↑ {fmt_rate(r["rx"] + r["tx"])}')
-                set_text(self.disk_val, f'R/W {fmt_rate(r["rd"] + r["wr"])}')
+                set_text(self.net_val, f'Net {fmt_rate(r["rx"] + r["tx"])}')
+                set_text(self.disk_val, f'Disk {fmt_rate(r["rd"] + r["wr"])}')
             else:
                 paused = state == libvirt.VIR_DOMAIN_PAUSED
                 set_text(self.cpu_val, 'Paused' if paused else '…')
-                set_text(self.mem_val, f'{r["rss"] / GB:.1f} / {assigned / GB:g} GB' if r and 'rss' in r else f'{assigned / GB:g} GB')
-                set_text(self.net_val, '↓↑ —')
-                set_text(self.disk_val, 'R/W —')
+                set_text(self.net_val, 'Net —')
+                set_text(self.disk_val, 'Disk —')
                 if paused:
                     self.spark.clear()
         else:
@@ -2061,6 +2339,7 @@ class VmRow(Gtk.EventBox):
         set_classes(self.f_up, set() if live else {'muted'}, ('muted',))
         c = self.c_drive()
         if c and live:
+            set_text(self.f_c.fact_caption, 'Guest C: drive')
             used, total = c
             frac = used / total if total else 0
             col = (*rgb('#FF99A4'), 1) if frac >= 0.95 else (*rgb('#FCE100'), 1) if frac >= 0.85 else LAB_RGBA
@@ -2070,6 +2349,7 @@ class VmRow(Gtk.EventBox):
             set_classes(self.c_val, set(), ('muted',))
             self.c_val.set_tooltip_text(f'Inside Windows: {fmt_bytes(total - used)} free')
         else:
+            set_text(self.f_c.fact_caption, 'Host disk footprint')
             self.c_bar.hide()
             set_text(self.c_val, f'{fmt_bytes(self.disk_used)} on host' if self.disk_used else '—')
             set_classes(self.c_val, {'muted'}, ('muted',))
@@ -2904,8 +3184,8 @@ def seg_control(options, active, cb):
 
 
 class ResourceView(Gtk.ScrolledWindow):
-    """What the lab costs the host. Hero (rings, verdict, headroom, thread map, KPIs), insights,
-    an activity timeline, where host RAM goes, a per-VM table, the lab networks and host facts.
+    """What the lab costs the host. Compact host metrics, an activity timeline, insights,
+    where host RAM goes, a per-VM table, the lab networks and host facts.
     Numbers are host-side (what each VM's QEMU process really uses), collected from libvirt and
     /proc on every 2 s tick, also while the view is hidden, so history is there when it opens."""
     RESERVE = 4 * GB  # RAM to leave for Linux and your apps before calling it "room for another VM"
@@ -2920,6 +3200,7 @@ class ResourceView(Gtk.ScrolledWindow):
         self.prev = None
         self._fetching = False
         self.samples = 0  # real samples so far (history is pre-filled with zeros)
+        self.sample_times = deque(maxlen=self.HIST)  # accepted sample times, not placeholder history
         self.rates = {}
         self.host = None
         self.mem_total = 0
@@ -2930,7 +3211,7 @@ class ResourceView(Gtk.ScrolledWindow):
         self.temps = deque(maxlen=15)
         self.hist = {n: {k: deque([0.0] * self.HIST, maxlen=self.HIST) for k in ('cpu', 'rss', 'rd', 'wr', 'rx', 'tx')}
                      for n in names}
-        self.hhist = {k: deque([0.0] * self.HIST, maxlen=self.HIST) for k in ('host', 'other_mem')}
+        self.hhist = {k: deque([0.0] * self.HIST, maxlen=self.HIST) for k in ('host', 'host_mem', 'other_mem')}
         self.net_hist = {net: {k: deque([0.0] * 90, maxlen=90) for k in ('rx', 'tx')} for net in NET_KIND}
         self.ran = {n: self.HIST + 1 for n in names}  # samples since a VM was last running (for the chart legend)
         try:
@@ -2945,8 +3226,8 @@ class ResourceView(Gtk.ScrolledWindow):
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, margin_start=24, margin_end=24, margin_bottom=24, margin_top=8)
         self.add(body)
         self._build_hero(body)
-        self._build_insights(body)
         self._build_activity(body)
+        self._build_insights(body)
         self._build_memory(body)
         self._build_table(body)
         self._build_networks(body)
@@ -2969,81 +3250,111 @@ class ResourceView(Gtk.ScrolledWindow):
 
     # -- layout -------------------------------------------------------------
     def _build_hero(self, body):
-        hero = styled(Gtk.Box(spacing=0), 'hero')
-        body.pack_start(hero, False, False, 0)
-        rings = Gtk.Box(spacing=8)
-        self.rings = {}
-        for key, title in (('cpu', 'Processor'), ('mem', 'Memory'), ('disk', 'Storage')):
-            block = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, halign=Gtk.Align.CENTER)
-            block.set_size_request(140, -1)
-            ov = Gtk.Overlay()
-            gauge = RingGauge()
-            ov.add(gauge)
-            mid = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0, halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
-            mid.set_margin_top(8)
-            val = styled(Gtk.Label(), 'ring-value')
-            unit = styled(Gtk.Label(), 'ring-unit')
-            mid.pack_start(val, False, False, 0)
-            mid.pack_start(unit, False, False, 0)
-            ov.add_overlay(mid)
-            ov.set_overlay_pass_through(mid, True)
-            block.pack_start(ov, False, False, 0)
-            block.pack_start(styled(Gtk.Label(label=title), 'ring-title'), False, False, 0)
-            legend = styled(Gtk.Label(use_markup=True, justify=Gtk.Justification.CENTER), 'ring-legend')
-            block.pack_start(legend, False, False, 0)
-            rings.pack_start(block, False, False, 0)
-            self.rings[key] = (gauge, val, unit, legend)
-        left = Gtk.Box()
-        left.pack_start(rings, False, False, 0)
-        left.pack_start(styled(Gtk.Box(), 'vhair'), False, False, 0)
-        hero.pack_start(left, False, False, 0)
+        overview = styled(Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12), 'resource-overview')
+        body.pack_start(overview, False, False, 0)
+        heading = Gtk.Box(spacing=12)
+        self.verdict = styled(Gtk.Label(label='Host overview', xalign=0, wrap=True), 'resource-heading')
+        self.hero_sub = styled(Gtk.Label(xalign=1, wrap=True), 'resource-summary')
+        heading.pack_start(self.verdict, False, False, 0)
+        heading.pack_end(self.hero_sub, True, True, 0)
+        overview.pack_start(heading, False, False, 0)
 
-        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, valign=Gtk.Align.CENTER, hexpand=True)
-        right.set_size_request(300, -1)
-        self.verdict = styled(Gtk.Label(xalign=0, wrap=True), 'hero-title')
-        self.hero_sub = styled(Gtk.Label(xalign=0, wrap=True), 'hero-sub')
-        right.pack_start(self.verdict, False, False, 0)
-        right.pack_start(self.hero_sub, False, False, 0)
-        mid = Gtk.Box(spacing=28, margin_top=6)
-        cap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        cap.pack_start(styled(Gtk.Label(label='CAPACITY', xalign=0), 'eyebrow'), False, False, 0)
-        hr = Gtk.Box(spacing=8)
-        self.headroom = styled(Gtk.Label(xalign=0), 'headroom-num')
-        self.headroom_text = styled(Gtk.Label(xalign=0, valign=Gtk.Align.CENTER), 'headroom-text')
-        hr.pack_start(self.headroom, False, False, 0)
-        hr.pack_start(self.headroom_text, False, False, 0)
-        cap.pack_start(hr, False, False, 0)
-        mid.pack_start(cap, False, False, 0)
-        tm = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, valign=Gtk.Align.CENTER)
-        tm.pack_start(styled(Gtk.Label(label='HOST THREADS', xalign=0), 'eyebrow'), False, False, 0)
+        metrics = styled(Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
+                                     min_children_per_line=1, max_children_per_line=3,
+                                     column_spacing=12, row_spacing=12), 'resource-metrics')
+        overview.pack_start(metrics, False, False, 0)
+        self.metric_cards = {}
+        for key, title in (('mem', 'Memory used'), ('cpu', 'CPU usage'), ('disk', 'Storage free')):
+            card = styled(Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, hexpand=True), 'resource-metric-card')
+            card.set_size_request(220, -1)
+            card.pack_start(styled(Gtk.Label(label=title, xalign=0), 'resource-metric-label'), False, False, 0)
+            value = styled(Gtk.Label(xalign=0), 'resource-metric-value')
+            caption = styled(Gtk.Label(xalign=0, wrap=True), 'resource-metric-caption')
+            card.pack_start(value, False, False, 0)
+            card.pack_start(caption, False, False, 0)
+            meter = Meter(5)
+            meter.set_hexpand(True)
+            meter.set_margin_top(8)
+            meter.set_margin_bottom(4)
+            card.pack_start(meter, False, False, 0)
+            legend = Gtk.Box(spacing=12)
+            labels = []
+            for col in (ACCENT, rgb('#72869E')):
+                item = Gtk.Box(spacing=5)
+                item.pack_start(Swatch(col, 7), False, False, 0)
+                label = styled(Gtk.Label(xalign=0), 'resource-metric-caption')
+                item.pack_start(label, False, False, 0)
+                legend.pack_start(item, False, False, 0)
+                labels.append(label)
+            card.pack_start(legend, False, False, 0)
+            metrics.add(card)
+            card.get_parent().set_can_focus(False)
+            self.metric_cards[key] = (meter, value, caption, *labels)
+
+        facts = styled(Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=False,
+                                   min_children_per_line=1, max_children_per_line=5,
+                                   column_spacing=22, row_spacing=10), 'resource-facts')
+        overview.pack_start(facts, False, False, 0)
+
+        def fact(title):
+            block = styled(Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3, valign=Gtk.Align.START),
+                           'resource-fact')
+            block.pack_start(styled(Gtk.Label(label=title, xalign=0), 'resource-fact-label'), False, False, 0)
+            facts.add(block)
+            block.get_parent().set_can_focus(False)
+            return block
+
+        cap = fact('Estimated capacity')
+        self.headroom = styled(Gtk.Label(xalign=0), 'resource-fact-value')
+        self.headroom_text = styled(Gtk.Label(xalign=0), 'resource-fact-note')
+        cap.pack_start(self.headroom, False, False, 0)
+        cap.pack_start(self.headroom_text, False, False, 0)
+        cap.set_tooltip_text('Estimate for additional 4 GB clients, allowing QEMU overhead and keeping '
+                             '4 GB of host memory available. This is not a reservation.')
+
+        threads = fact('vCPU allocation')
+        thread_line = Gtk.Box(spacing=4)
+        self.thread_value = styled(Gtk.Label(xalign=0), 'resource-fact-value')
+        thread_line.pack_start(self.thread_value, False, False, 0)
+        thread_button = styled(Gtk.MenuButton(), 'resource-thread-button')
+        thread_button.set_image(Gtk.Image.new_from_icon_name('dialog-information-symbolic', Gtk.IconSize.MENU))
+        thread_button.set_tooltip_text('Host thread activity and load')
+        thread_button.get_accessible().set_name('Host thread activity and load')
+        thread_line.pack_start(thread_button, False, False, 0)
+        threads.pack_start(thread_line, False, False, 0)
+        pop = Gtk.Popover.new(thread_button)
+        tm = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin=12)
         self.threadmap = ThreadMap(self.ncpu)
+        # Keep the existing per-thread detail useful on large-core-count hosts
+        # without letting the popover grow wider than the window.
+        self.threadmap.cols = min(24, self.threadmap.cols)
+        thread_rows = (self.ncpu + self.threadmap.cols - 1) // self.threadmap.cols
+        self.threadmap.set_size_request(int(self.threadmap.cols * 11.6), thread_rows * 10)
         tm.pack_start(self.threadmap, False, False, 0)
-        self.tm_cap = styled(Gtk.Label(xalign=0), 'ring-legend')
+        self.tm_cap = styled(Gtk.Label(xalign=0), 'resource-fact-note')
         tm.pack_start(self.tm_cap, False, False, 0)
-        mid.pack_start(tm, False, False, 0)
-        right.pack_start(mid, False, False, 0)
-        kpis = Gtk.Box(spacing=8, homogeneous=True, margin_top=4)
-        kpis.set_size_request(300, -1)
+        pop.add(tm)
+        tm.show_all()
+        thread_button.set_popover(pop)
         self.kpi = {}
-        for key, cap_text in (('over', 'Overcommit'), ('qemu', 'QEMU overhead'), ('temp', 'CPU package'), ('up', 'Host up')):
-            tile = styled(Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2), 'kpi')
-            tile.pack_start(styled(Gtk.Label(label=cap_text.upper(), xalign=0, ellipsize=Pango.EllipsizeMode.END),
-                                   'kpi-cap'), False, False, 0)
-            val = styled(Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END), 'kpi-val')
+        ratio = styled(Gtk.Label(xalign=0), 'resource-fact-note')
+        threads.pack_start(ratio, False, False, 0)
+        self.kpi['over'] = (threads, ratio)
+        for key, title in (('qemu', 'QEMU overhead'), ('temp', 'CPU package'), ('up', 'Host uptime')):
+            tile = fact(title)
+            val = styled(Gtk.Label(xalign=0), 'resource-fact-value')
             tile.pack_start(val, False, False, 0)
             if key == 'temp':
                 self.tempbar = TempBar()
-                self.tempbar.set_margin_top(3)
+                self.tempbar.set_margin_top(2)
                 tile.pack_start(self.tempbar, False, False, 0)
-            kpis.pack_start(tile, True, True, 0)
             self.kpi[key] = (tile, val)
-        right.pack_start(kpis, False, False, 0)
-        hero.pack_start(right, True, True, 0)
 
     def _build_insights(self, body):
         row, self.insight_cap = section_title('Insights', '')
         body.pack_start(row, False, False, 0)
-        self.insight_box = styled(Gtk.Box(orientation=Gtk.Orientation.VERTICAL), 'card', 'res', 'listgroup')
+        self.insight_box = styled(Gtk.Box(orientation=Gtk.Orientation.VERTICAL), 'card', 'res', 'listgroup',
+                                 'resource-insights')
         body.pack_start(self.insight_box, False, False, 0)
         self.insight_rows = []
         self.insight_keys = None
@@ -3056,34 +3367,42 @@ class ResourceView(Gtk.ScrolledWindow):
         row, _ = section_title('Activity')
         row.pack_end(controls, False, False, 0)
         body.pack_start(row, False, False, 0)
-        card = styled(Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8), 'card', 'res')
+        card = styled(Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8), 'card', 'res', 'resource-activity')
         body.pack_start(card, False, False, 0)
         self.timeline = Timeline(self)
         card.pack_start(self.timeline, False, False, 0)
         legend_row = Gtk.Box(spacing=8)
-        legend = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=12, min_children_per_line=1,
-                             column_spacing=6, row_spacing=6, homogeneous=False, hexpand=True, valign=Gtk.Align.START)
+        legend = styled(Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=12,
+                                   min_children_per_line=1, column_spacing=12, row_spacing=4,
+                                   homogeneous=False, hexpand=True, valign=Gtk.Align.START), 'resource-legend')
         legend_row.pack_start(legend, True, True, 0)
         self.legend_chips = {}
-        for name in self.names + ['Other']:
-            b = styled(Gtk.ToggleButton(), 'legend-chip')
+        for name in ['Total'] + self.names + ['Other']:
+            selectable = name not in ('Total', 'Other')
+            b = styled(Gtk.ToggleButton() if selectable else Gtk.Box(), 'resource-legend-item')
+            b.set_halign(Gtk.Align.START)
+            b.set_hexpand(False)
+            if selectable:
+                styled(b, 'legend-chip')
             inner = Gtk.Box(spacing=6)
-            sw = Swatch(vm_rgb(name) if name != 'Other' else (0.62, 0.62, 0.62), 8, round_=True)
+            color = rgb('#AC8DFF') if name == 'Total' else rgb('#63D3FA') if name == 'Other' else vm_rgb(name)
+            sw = Swatch(color, 7, round_=True)
             inner.pack_start(sw, False, False, 0)
             lbl = Gtk.Label(label=short(name))
             inner.pack_start(lbl, False, False, 0)
             b.add(inner)
             b.set_no_show_all(True)
             inner.show_all()
-            if name != 'Other':
+            if selectable:
                 b.connect('toggled', lambda btn, n=name: self._legend_toggled(btn, n))
                 b.connect('enter-notify-event', lambda *_a, n=name: self.set_hover(n))
                 b.connect('leave-notify-event', lambda *_a: self.set_hover(None))
-            else:
-                b.set_sensitive(False)
             legend.add(b)
-            b.get_parent().set_can_focus(False)
-            b.get_parent().set_no_show_all(True)
+            child = b.get_parent()
+            child.set_can_focus(False)
+            child.set_halign(Gtk.Align.START)
+            child.set_hexpand(False)
+            child.set_no_show_all(True)
             self.legend_chips[name] = (b, lbl)
         self.scale_tag = styled(Gtk.Label(valign=Gtk.Align.START), 'scale-tag')
         legend_row.pack_end(self.scale_tag, False, False, 0)
@@ -3103,7 +3422,7 @@ class ResourceView(Gtk.ScrolledWindow):
         self.ram_legend = styled(Gtk.Label(xalign=0, use_markup=True, wrap=True), 'res-sub')
         card.pack_start(self.ram_legend, False, False, 0)
 
-    COLS = (('VM', 150), ('CPU', 170), ('Memory on host', 140), ('Disk I/O', 120), ('Network', 120), ('Disk on host', 96))
+    COLS = (('VM', 170), ('CPU', 132), ('Memory on host', 138), ('Disk I/O', 126), ('Network', 126), ('Disk on host', 108))
 
     def _build_table(self, body):
         row, self.table_cap = section_title('Virtual machines', '')
@@ -3112,11 +3431,11 @@ class ResourceView(Gtk.ScrolledWindow):
         body.pack_start(card, False, False, 0)
         self.size_groups = [Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL) for _ in self.COLS]
         head = styled(Gtk.Box(spacing=12), 'lg-head')
-        for (title, width), sg in zip(self.COLS, self.size_groups):
-            lbl = Gtk.Label(label=title.upper(), xalign=0)
+        for i, ((title, width), sg) in enumerate(zip(self.COLS, self.size_groups)):
+            lbl = Gtk.Label(label=title, xalign=0)
             lbl.set_size_request(width, -1)
             sg.add_widget(lbl)
-            head.pack_start(lbl, True, True, 0)
+            head.pack_start(lbl, i == 0, True, 0)
         card.pack_start(head, False, False, 0)
         self.trows = {}
         for name in self.names:
@@ -3124,7 +3443,7 @@ class ResourceView(Gtk.ScrolledWindow):
             card.pack_start(self._table_row(name), False, False, 0)
         total = styled(Gtk.Box(spacing=12), 'res-total-row')
         self.total_cells = []
-        for (_t, width), sg in zip(self.COLS, self.size_groups):
+        for i, ((_t, width), sg) in enumerate(zip(self.COLS, self.size_groups)):
             cell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
             cell.set_size_request(width, -1)
             main = styled(Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END), 'res-total')
@@ -3132,7 +3451,7 @@ class ResourceView(Gtk.ScrolledWindow):
             cell.pack_start(main, False, False, 0)
             cell.pack_start(sub, False, False, 0)
             sg.add_widget(cell)
-            total.pack_start(cell, True, True, 0)
+            total.pack_start(cell, i == 0, True, 0)
             self.total_cells.append((main, sub))
         self.total_cells[0][0].set_text('Total')
         card.pack_start(total, False, False, 0)
@@ -3148,7 +3467,7 @@ class ResourceView(Gtk.ScrolledWindow):
         def cell(i, widget):
             widget.set_size_request(self.COLS[i][1], -1)
             self.size_groups[i].add_widget(widget)
-            hb.pack_start(widget, True, True, 0)
+            hb.pack_start(widget, i == 0, True, 0)
 
         c0 = Gtk.Box(spacing=8)
         t['swatch'] = Swatch(col, 10)
@@ -3175,8 +3494,19 @@ class ResourceView(Gtk.ScrolledWindow):
             cell(i, box)
             return main, sub
 
-        t['spark'] = Sparkline(col, 72, 28, 60, scale='auto', dot=True)
-        t['cpu'] = metric(1, t['spark'])
+        # Keep the CPU value aligned with its header. The graph shares the first
+        # line rather than pushing every CPU reading a full sparkline-width right.
+        cpu_cell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.CENTER)
+        cpu_line = Gtk.Box(spacing=8)
+        cpu_main = styled(Gtk.Label(xalign=0), 'res-main')
+        t['spark'] = Sparkline(col, 48, 16, 60, scale='auto', dot=True)
+        cpu_line.pack_start(cpu_main, False, False, 0)
+        cpu_line.pack_end(t['spark'], False, False, 0)
+        cpu_sub = styled(Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END), 'res-sub')
+        cpu_cell.pack_start(cpu_line, False, False, 0)
+        cpu_cell.pack_start(cpu_sub, False, False, 0)
+        cell(1, cpu_cell)
+        t['cpu'] = (cpu_main, cpu_sub)
         t['membar'] = Meter(6, 96)
         t['mem'] = metric(2, None)
         # put the bar between the two lines
@@ -3259,7 +3589,7 @@ class ResourceView(Gtk.ScrolledWindow):
         for n, t in self.trows.items():
             set_classes(t['box'], {'focused'} if n == self.focus else set(), ('focused',))
         for n, (b, _l) in self.legend_chips.items():
-            if n != 'Other' and b.get_active() != (n == self.focus):
+            if n not in ('Total', 'Other') and b.get_active() != (n == self.focus):
                 b.set_active(n == self.focus)
         self.timeline.queue_draw()
         self.rambar.queue_draw()
@@ -3383,6 +3713,7 @@ class ResourceView(Gtk.ScrolledWindow):
             self.ran[name] = 0 if r['running'] else self.ran.get(name, self.HIST + 1) + 1
         self.rates = rates
         self.samples += 1
+        self.sample_times.append(now)
         span = max(1, host['total'] - prev[1]['total'])
         host_pct = (host['busy'] - prev[1]['busy']) / span * 100
         per = [(b1 - b0) / max(1, t1 - t0) * 100 for (b0, t0), (b1, t1) in zip(prev[1]['per'], host['per'])]
@@ -3392,6 +3723,7 @@ class ResourceView(Gtk.ScrolledWindow):
         self.host = {'pct': host_pct, 'per': per, 'mem': mem, 'load': host['load'], 'uptime': host['uptime'],
                      'lab_rss': lab_rss}
         self.hhist['host'].append(host_pct)
+        self.hhist['host_mem'].append(max(0, mem['MemTotal'] - mem['MemAvailable']))
         self.hhist['other_mem'].append(max(0, mem['MemTotal'] - mem['MemAvailable'] - lab_rss))
         for net, (rx, tx) in nets.items():
             # CorpNet: every frame between VMs is sent once, so the members' tx is the traffic.
@@ -3448,50 +3780,59 @@ class ResourceView(Gtk.ScrolledWindow):
         return t
 
     def render_hero(self, t):
-        g, val, unit, legend = self.rings['cpu']
-        g.set(t['lab_pct'] / 100, max(0, t['host_pct'] - t['lab_pct']) / 100)
+        meter, val, caption, lab, other = self.metric_cards['cpu']
+        other_cpu = max(0, t['host_pct'] - t['lab_pct'])
+        meter.set([(t['lab_pct'] / 100, (*ACCENT, 0.95)),
+                   (other_cpu / 100, (*rgb('#72869E'), 0.9))])
         set_text(val, f'{t["host_pct"]:.0f}%')
-        set_text(unit, 'CPU')
-        set_text(legend, f'<span foreground="#60cdff">●</span> Lab {t["lab_pct"]:.1f}%\n'
-                         f'<span foreground="#9e9e9e">●</span> Other {t["host_pct"] - t["lab_pct"]:.1f}%', markup=True)
-        g, val, unit, legend = self.rings['mem']
-        stops = (('#FF6B7D', '#FF8A96', '#FF99A4') if t['avail'] < self.RESERVE else
-                 ('#FFD257', '#FCE100', '#FFF199') if t['avail'] < 8 * GB else None)
-        g.set(t['rss'] / t['total'], t['other'] / t['total'], stops or ('#2F8FFF', '#60CDFF', '#B5ECFF'))
-        set_text(val, f'{(t["total"] - t["avail"]) / GB:.1f}')
-        set_text(unit, f'of {t["total"] / GB:.1f} GB')
-        set_text(legend, f'<span foreground="#60cdff">●</span> Lab {fmt_bytes(t["rss"])}\n'
-                         f'<span foreground="#9e9e9e">●</span> Other {fmt_bytes(t["other"])}', markup=True)
-        g, val, unit, legend = self.rings['disk']
+        set_text(caption, f'{self.ncpu} host threads')
+        set_text(lab, f'Lab {t["lab_pct"]:.1f}%')
+        set_text(other, f'Other {other_cpu:.1f}%')
+
+        meter, val, caption, lab, other = self.metric_cards['mem']
+        total = max(1, t['total'])
+        meter.set([(t['rss'] / total, (*ACCENT, 0.95)),
+                   (t['other'] / total, (*rgb('#72869E'), 0.9))])
+        set_text(val, f'{(t["total"] - t["avail"]) / GB:.1f} GB')
+        set_text(caption, f'of {t["total"] / GB:.1f} GB · {fmt_bytes(t["avail"])} free')
+        set_text(lab, f'Lab {fmt_bytes(t["rss"])}')
+        set_text(other, f'Other {fmt_bytes(t["other"])}')
+        set_classes(val, {'crit'} if t['avail'] < self.RESERVE else {'warn'} if t['avail'] < 8 * GB else set(),
+                    ('warn', 'crit'))
+
+        meter, val, caption, lab, other = self.metric_cards['disk']
         fs_other = max(0, t['fs_total'] - t['fs_free'] - t['disk'])
-        g.set(t['disk'] / t['fs_total'], fs_other / t['fs_total'])
+        fs_total = max(1, t['fs_total'])
+        meter.set([(t['disk'] / fs_total, (*ACCENT, 0.95)),
+                   (fs_other / fs_total, (*rgb('#72869E'), 0.9))])
         set_text(val, fmt_bytes(t['fs_free']).replace('.0 ', ' '))
-        set_text(unit, f'free of {fmt_bytes(t["fs_total"])}')
-        set_text(legend, f'<span foreground="#60cdff">●</span> Lab disks {fmt_bytes(t["disk"])}\n'
-                         f'<span foreground="#9e9e9e">●</span> Other {fmt_bytes(fs_other)}', markup=True)
+        set_text(caption, f'of {fmt_bytes(t["fs_total"])} · host storage')
+        set_text(lab, f'Lab {fmt_bytes(t["disk"])}')
+        set_text(other, f'Other {fmt_bytes(fs_other)}')
 
         insights = self.insights(t)
         worst = insights[0][0] if insights else 'ok'
-        if not t['running']:
-            verdict = 'Lab is idle'
-        elif worst == 'crit' and any(i[1] == 'Memory' for i in insights if i[0] == 'crit'):
+        if worst == 'crit' and any(i[1].startswith('Memory') for i in insights if i[0] == 'crit'):
             verdict = 'Memory is critically low'
         elif worst in ('crit', 'warn'):
             verdict = insights[0][1]
+        elif not t['running']:
+            verdict = 'Lab is idle'
         else:
-            verdict = 'Lab is running comfortably'
+            verdict = 'Host overview'
         set_text(self.verdict, verdict)
-        set_text(self.hero_sub, f'{t["running"]} of {len(self.names)} VMs running · {t["vcpus"]} vCPU on '
-                                f'{self.ncpu} threads · {fmt_bytes(t["rss"])} in host RAM')
-        set_text(self.headroom, str(t['room']))
+        set_classes(self.verdict, {worst} if worst in ('crit', 'warn') else set(), ('crit', 'warn'))
+        set_text(self.hero_sub, f'{t["running"]} of {len(self.names)} VMs running')
+        set_text(self.headroom, f'{t["room"]} more 4 GB client{"s" if t["room"] != 1 else ""}')
         set_classes(self.headroom, {'crit'} if t['avail'] < self.RESERVE else {'warn'} if t['room'] == 0 else set(),
                     ('warn', 'crit'))
-        set_text(self.headroom_text, f'more 4 GB client{"s" if t["room"] != 1 else ""}\nwith {fmt_bytes(self.RESERVE, 0)} kept free')
+        set_text(self.headroom_text, f'{fmt_bytes(self.RESERVE, 0)} reserve')
+        set_text(self.thread_value, f'{t["vcpus"]} / {self.ncpu} threads')
         self.threadmap.set(self.host['per'])
         set_text(self.tm_cap, f'{self.ncpu} threads · load {self.host["load"][0]:.2f}')
         ratio = t['vcpus'] / self.ncpu
         tile, v = self.kpi['over']
-        set_text(v, f'{ratio:.2f} : 1')
+        set_text(v, f'{ratio:.2f} : 1 overcommit')
         set_classes(v, {'warn'} if ratio > 1 else set(), ('warn',))
         tile.set_tooltip_text(f'{t["vcpus"]} vCPUs on {self.ncpu} host threads; {fmt_bytes(t["assigned"], 0)} of RAM '
                               f'assigned out of {fmt_bytes(t["total"], 0)}')
@@ -3506,8 +3847,8 @@ class ResourceView(Gtk.ScrolledWindow):
             set_text(v, f'{t["temp"]:.0f} °C')
             set_classes(v, {'warn'} if t['temp'] >= self.temp_crit - 3 else set(), ('warn',))
             self.tempbar.set((t['temp'] - 40) / max(1, self.temp_crit - 40))
-            tile.set_tooltip_text(f'CPU package, 30 s average. Limit {self.temp_crit:.0f} °C: laptops often sit near it '
-                                  'and slow down instead of failing.')
+            tile.set_tooltip_text(f'CPU package, 30 s average. Critical threshold {self.temp_crit:.0f} °C. '
+                                  'The existing caution state starts 3 °C below that threshold.')
         else:
             set_text(v, '—')
         tile, v = self.kpi['up']
@@ -3520,10 +3861,10 @@ class ResourceView(Gtk.ScrolledWindow):
         if t['running']:
             sev = 'crit' if t['avail'] < self.RESERVE else 'warn' if t['avail'] < 8 * GB else 'ok'
             swap = self.host['mem'].get('SwapTotal', 0)
-            body = (f'{t["running"]} VMs hold {fmt_bytes(t["rss"])} ({t["rss"] / t["total"] * 100:.0f}%) · '
-                    f'{fmt_bytes(t["overhead"], 0)} QEMU overhead · {fmt_bytes(t["avail"])} left'
-                    + ('' if swap else ' · no swap, so if RAM runs out Linux stops the biggest VM (CM1)'))
-            out.append((sev, 'Memory' if sev == 'ok' else 'Memory is running low', body,
+            body = (f'{t["running"]} VMs · {fmt_bytes(t["rss"])} in host RAM · '
+                    f'{fmt_bytes(t["overhead"], 0)} QEMU overhead · {fmt_bytes(t["avail"])} available'
+                    + ('' if swap else ' · no swap configured'))
+            out.append((sev, 'Memory headroom' if sev == 'ok' else 'Memory is running low', body,
                         ('Freeze lab', self.app.freeze_lab) if sev != 'ok' and not self.app.lab_run else None))
             emu = max(0.0, t['cpu'] - t['vcpu_t'])
             out.append(('info', f'Lab uses {t["lab_pct"]:.1f}% of the CPU',
@@ -3560,10 +3901,12 @@ class ResourceView(Gtk.ScrolledWindow):
                         'The laptop slows the CPU down to stay cool; VMs may run slower under load.', None))
         if t['vcpus'] > self.ncpu:
             out.append(('info', 'vCPUs share host threads', f'{t["vcpus"]} vCPUs on {self.ncpu} threads', None))
-        if not any(s in ('warn', 'crit') for s, *_ in out):
-            out.append(('ok', 'No problems found', f'Overcommit {t["vcpus"] / self.ncpu:.2f} : 1 · '
-                        f'{fmt_bytes(t["assigned"], 0)} of {fmt_bytes(t["total"], 0)} assigned', None))
-        order = {'crit': 0, 'warn': 1, 'info': 2, 'ok': 3}
+        if not out:
+            out.append(('info', 'Memory headroom', f'{fmt_bytes(t["avail"])} available · '
+                        f'{fmt_bytes(self.RESERVE, 0)} reserve for the host', None))
+        # Actionable warnings stay first. The otherwise stable order retains
+        # memory before the routine CPU detail instead of demoting an OK state.
+        order = {'crit': 0, 'warn': 1, 'info': 2, 'ok': 2}
         return sorted(out, key=lambda i: order[i[0]])[:6]
 
     def render_insights(self, t):
@@ -3597,7 +3940,7 @@ class ResourceView(Gtk.ScrolledWindow):
                 set_text(tl, title)
                 set_text(bl, body)
         n_bad = sum(1 for i in items if i[0] in ('warn', 'crit'))
-        set_text(self.insight_cap, f'{n_bad} need{"s" if n_bad == 1 else ""} attention' if n_bad else 'All clear')
+        set_text(self.insight_cap, f'{n_bad} need{"s" if n_bad == 1 else ""} attention' if n_bad else 'Resource details')
 
     def render_activity(self):
         if not self.host:
@@ -3605,12 +3948,31 @@ class ResourceView(Gtk.ScrolledWindow):
         self.timeline.queue_draw()
         mode = self.timeline.mode
         for name, (b, lbl) in self.legend_chips.items():
+            if name == 'Total':
+                b.show()
+                b.get_parent().show()
+                if mode == 'cpu':
+                    text = f'Host total  {self.hhist["host"][-1]:.1f}%'
+                    tip = 'Host CPU usage measured independently of the virtual machines.'
+                elif mode == 'mem':
+                    text = f'Host total  {fmt_bytes(self.hhist["host_mem"][-1])}'
+                    tip = 'Host memory in use: MemTotal minus MemAvailable.'
+                else:
+                    first, second = ('rd', 'wr') if mode == 'disk' else ('rx', 'tx')
+                    value = sum(self.hist[n][first][-1] + self.hist[n][second][-1] for n in self.names)
+                    text = f'Lab total  {fmt_rate(value)}'
+                    tip = ('Read plus write across the tracked lab VMs.' if mode == 'disk' else
+                           'Receive plus transmit across the tracked lab VMs; this is not all host traffic.')
+                set_text(lbl, text)
+                b.set_tooltip_text(tip)
+                continue
             if name == 'Other':
                 b.set_visible(mode in ('cpu', 'mem'))
                 b.get_parent().set_visible(mode in ('cpu', 'mem'))
                 v = max(0.0, self.hhist['host'][-1] - sum(self.hist[n]['cpu'][-1] for n in self.names)) if mode == 'cpu' \
                     else self.hhist['other_mem'][-1]
                 set_text(lbl, f'Other host  {v:.1f}%' if mode == 'cpu' else f'Linux & apps  {fmt_bytes(v)}')
+                b.set_tooltip_text('Host usage remaining after the tracked VMs, shown as a separate cyan trace.')
                 continue
             shown = self.ever_ran(name, self.HIST if self.timeline.minutes == 15 else self.HIST // 3)
             b.set_visible(shown)
@@ -3619,9 +3981,9 @@ class ResourceView(Gtk.ScrolledWindow):
             v = (f'{h["cpu"][-1]:.1f}%' if mode == 'cpu' else fmt_bytes(h['rss'][-1]) if mode == 'mem' else
                  fmt_rate(h['rd'][-1] + h['wr'][-1]) if mode == 'disk' else fmt_rate(h['rx'][-1] + h['tx'][-1]))
             set_text(lbl, f'{short(name)}  {v}')
-        tl = self.timeline
-        scale = (f'Scale {tl.ymax_shown:.0f}%' if mode == 'cpu' and tl.ymax_shown else
-                 f'Scale {self.mem_total / GB:.0f} GB' if mode == 'mem' else 'Auto scale')
+        # The draw callback chooses the current scale after this render. The axis
+        # carries its exact values; do not repeat the previous frame's scale here.
+        scale = f'Installed {self.mem_total / GB:.1f} GB' if mode == 'mem' else 'Auto scale'
         set_text(self.scale_tag, scale)
 
     def render_memory(self, t):
@@ -3774,20 +4136,38 @@ class LabManager:
         win.get_style_context().add_class('lab')
         win.set_default_size(940, 780)
         win.set_icon_name('computer')
-        hb = Gtk.HeaderBar(show_close_button=True, title='Lab Manager')
+        hb = Gtk.HeaderBar(show_close_button=True, title='Lab Manager', subtitle='corp.contoso.com')
         self.header = hb
-        self.start_lab_btn = text_button('Start lab', 'accent', self.start_lab)
+        # Keep the HeaderBar's subtitle property for the existing progress/status
+        # updates, while presenting its identity at the left of the native chrome.
+        hb.set_custom_title(Gtk.Box())
+        brand = Gtk.Box(spacing=10, valign=Gtk.Align.CENTER)
+        mark = Gtk.Image.new_from_icon_name('network-server-symbolic', Gtk.IconSize.LARGE_TOOLBAR)
+        styled(mark, 'app-mark')
+        brand.pack_start(mark, False, False, 0)
+        identity = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        identity.pack_start(styled(Gtk.Label(label='Lab Manager', xalign=0), 'app-title'), False, False, 0)
+        subtitle = styled(Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END,
+                                    max_width_chars=80), 'app-subtitle')
+        hb.bind_property('subtitle', subtitle, 'label', GObject.BindingFlags.SYNC_CREATE)
+        identity.pack_start(subtitle, False, False, 0)
+        brand.pack_start(identity, False, False, 0)
+        hb.pack_start(brand)
+        toolbar = styled(Gtk.Box(spacing=12), 'app-toolbar')
+        self.start_lab_btn = text_button('Start lab', 'subtle', self.start_lab)
         self.start_lab_btn.set_tooltip_text('Start DC1, GW1, CM1, then CLIENT1–4, each after the previous is up')
-        hb.pack_start(self.start_lab_btn)
         self.freeze_btn = text_button('Freeze lab', 'subtle', self.freeze_lab)
         self.freeze_btn.set_image(Gtk.Image.new_from_icon_name('weather-snow-symbolic', Gtk.IconSize.BUTTON))
         self.freeze_btn.set_always_show_image(True)
         self.freeze_btn.set_tooltip_text('Save every running VM to disk and free its RAM; Resume lab brings back exactly these')
-        hb.pack_start(self.freeze_btn)
         self.view_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE, hhomogeneous=False)
-        switcher = Gtk.StackSwitcher(stack=self.view_stack)
+        switcher = styled(Gtk.StackSwitcher(stack=self.view_stack), 'view-tabs')
         switcher.set_valign(Gtk.Align.CENTER)
-        hb.pack_start(switcher)
+        toolbar.pack_start(switcher, False, False, 0)
+        lab_actions = Gtk.Box(spacing=8, valign=Gtk.Align.CENTER)
+        lab_actions.pack_start(self.start_lab_btn, False, False, 0)
+        lab_actions.pack_start(self.freeze_btn, False, False, 0)
+        toolbar.pack_end(lab_actions, False, False, 0)
         hb.pack_end(icon_button('preferences-system-symbolic', 'Open virt-manager (advanced settings)',
                                 lambda: subprocess.Popen(['virt-manager', '--connect', URI])))
         win.set_titlebar(hb)
@@ -3818,7 +4198,10 @@ class LabManager:
         self.view_stack.add_titled(self.resources, 'resources', 'Resources')
         self.view_stack.connect('notify::visible-child-name', self.on_view_changed)
         overlay.add(self.view_stack)
-        win.add(overlay)
+        shell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        shell.pack_start(toolbar, False, False, 0)
+        shell.pack_start(overlay, True, True, 0)
+        win.add(shell)
         win.connect('destroy', lambda *_: (self.grid.stop(), self.probe.stop(), setattr(self, 'window', None),
                                            self.maybe_quit()))
         self.window = win

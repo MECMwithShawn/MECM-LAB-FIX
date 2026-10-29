@@ -144,19 +144,23 @@ Linux/manager/install.sh          # adds "Lab Manager" to the apps menu
 ```
 
 A cleaner front end than virt-manager for this lab:
-- **Main window (List):** servers and clients as cards. Each shows status, role and Windows
-  version (`Server 2025 · 26100`, or **No guest tools**), live **CPU** (graph), **memory** (host RAM
-  vs. assigned) and **I/O**, or for a VM that's off when it was last used, how long it's been frozen
-  and the size of its memory image, or that its disk is empty (PXE targets). A facts strip below
+- **Main window (List):** compact, aligned server and client rows. Each shows status, role and Windows
+  version (`Server 2025 · 26100`, or **No guest tools**), live **CPU** (graph), **host RAM** and
+  **assigned guest RAM** as separate values, plus **I/O**. An off VM shows when it was last used,
+  how long it has been frozen and the size of its memory image, or that its disk is empty (PXE targets).
+  The remembered details expander contains a facts strip that
   lists its **addresses** per network (real IPs from the guest agent, the lab plan otherwise),
   who's **signed in**, **uptime**, **C:** usage inside Windows and its **checkpoints**. Chips warn
   about a drifting clock (click to set it from the host; Kerberos fails beyond 5 minutes), a full
-  C: drive, a guest agent that stopped answering or a crash. The ⌄ button (or a double-click)
-  opens details: Windows edition, build, host name, sign-in times, clock, firmware, TPM, display;
+  C: drive, a guest agent that stopped answering or a crash. Warning chips stay visible when details
+  are collapsed. The ⌄ button (or a double-click) also reveals Windows edition, build, host name,
+  sign-in times, clock, firmware, TPM, display;
   each NIC's network, MAC, device and traffic; volumes, disk image, activity and the newest
   checkpoints. Windows details come from the QEMU guest agent about once a minute, checkpoints
   every 5 minutes, so VMs without guest tools show the lab-plan values. Each card has a
-  power button, Connect, and a menu with the power options, Checkpoints… and Open in virt-manager. **Start lab** boots DC1 → GW1 → CM1 → CLIENT1–4, waiting
+  power button, Connect and a menu with the power options, Checkpoints… and Open in virt-manager.
+  Navigation and global lab actions have separate groups below the native title bar.
+  **Start lab** boots DC1 → GW1 → CM1 → CLIENT1–4, waiting
   for DC1 and GW1 to answer before starting the rest. While it runs, the header shows its progress
   and the button becomes **Cancel**; any VM you start or shut down yourself meanwhile is skipped.
 - **Power options, VMware style** (power button on a card, or in the console header):
@@ -188,16 +192,22 @@ A cleaner front end than virt-manager for this lab:
   screenshots, not SPICE, so they don't take a VM's one viewer slot: an open console keeps working.
   The app remembers which view you used last.
 - **Resources view:** a dashboard of what the lab costs the host.
-  - **Hero:** rings for the host's processor, memory and storage (the lab's share vs. everything
-    else), a plain-words verdict, **capacity** (how many more 4 GB clients fit with 4 GB kept for
-    the host), a map of all 32 host threads, and tiles for vCPU overcommit, QEMU overhead, CPU
-    package temperature and host uptime.
-  - **Insights:** memory pressure (no swap on this host, so running out of RAM kills a VM),
+  - **Host overview:** compact Memory, CPU and Storage cards with explicit units and lab/other
+    breakdowns. A facts strip retains estimated **capacity** (additional 4 GB clients with a 4 GB
+    reserve), vCPU overcommit, QEMU overhead, package temperature and host uptime. Host-thread
+    activity is available from its supporting control. Capacity is an estimate, not a guarantee.
+  - **Activity:** immediately below the overview, smooth neon component traces on graphite with
+    restrained glow and a fading total fill. CPU and memory show independently measured host totals;
+    memory includes **Linux & apps**. Disk and network retain directional read/write or receive/send
+    traces. The 5 and 15 minute windows preserve actual samples and peaks. Startup shows the recorded
+    interval with a collecting-history label, with no invented leading history. Curves preserve
+    extrema and break across missing intervals. Hover reports observed values and plain relative time.
+    Hover or click a VM (here, in the table or the RAM bar) to highlight it.
+  - **Insights:** condensed below Activity, with memory before routine CPU information. Memory pressure,
     the lab's CPU share and overhead, frozen VMs and whether resuming them fits in RAM, clock drift,
-    a full C:, low disk space and heat, with buttons (Freeze lab, Resume lab, Sync clock).
-  - **Activity:** a 5 or 15 minute chart of CPU, memory, disk or network, stacked per VM in its
-    own colour, with a hover tooltip. Hover or click a VM (here, in the table or the RAM bar) to
-    highlight it.
+    a full C:, low disk space and heat retain their existing actions (Freeze lab, Resume lab, Sync clock).
+    Resource statements are scoped to the measurements available. No-swap status does not claim
+    which process Linux would terminate under memory pressure.
   - **Where host RAM goes:** every running VM, QEMU overhead, Linux & apps and free memory, the
     4 GB reserve line, and dashed outlines for frozen VMs showing what resuming would need.
   - **Virtual machines:** a table with CPU, host RAM, disk and network graphs and disk-image
@@ -223,6 +233,28 @@ opening it in Lab Manager disconnects a virt-manager console showing the same VM
 takes over, the console shows **Disconnected** with a **Reconnect** button rather than fighting it.
 Lab Manager runs as a single instance: launching it again brings the open window to the front. Run one VM's
 console directly with `labmanager.py --console HYD-DC1`.
+
+### Safe UI checks
+
+The UI fixture renders the actual GTK3 widgets with deterministic simulated host and VM data.
+It creates a private Xvfb display, blocks live libvirt connections and VM actions, disables the
+guest/console workers and keeps settings in memory. It never opens a VM console or uses your desktop.
+Console thumbnails are labeled simulated placeholders. These checks do not validate the live lab.
+
+```bash
+python3 -B -m unittest discover -s Linux/manager/tests -p 'test_*.py'
+/usr/bin/python3 -B Linux/manager/tests/render_fixture.py --output /tmp/lab-manager-ui
+/usr/bin/python3 -B Linux/manager/tests/render_fixture.py --output /tmp/lab-manager-ui-stress --width 1024 --height 900 --stress
+```
+
+The fixture requires the app's GTK3/Spice/libvirt Python dependencies plus `xvfb`, `xauth` and
+`python3-gi-cairo`. It captures List, expanded details, Consoles, all Activity modes, hover,
+15-minute history and empty/short histories. Its timing JSON separates the synchronous tick,
+resource rendering and chart drawing. The optional stress run also measures uncached chart draws
+with nine simulated running VMs and 450 raw samples. The simulated timings exclude live libvirt collection
+and real console image decoding. Recheck the approximately 20 ms ordinary-refresh target on the
+lab machine. The pre-existing approximately 48 ms Consoles decode path remains a deferred exception.
+See [before/after screenshots and validation results](docs/lab-manager-ui/README.md).
 
 ## Checkpoints (the lab guide's "Revert HYD-CLIENT4 to the latest checkpoint")
 
