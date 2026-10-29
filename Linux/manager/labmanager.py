@@ -169,11 +169,60 @@ GLYPHS = {
 }
 
 
-def tile_pixbuf(kind, active):
-    fg = '#60cdff' if active else '#8f8f8f'
-    bg = 'rgba(96,205,255,0.13)' if active else 'rgba(255,255,255,0.05)'
-    rim = 'rgba(96,205,255,0.35)' if active else 'rgba(255,255,255,0.08)'
-    svg = TILE_SVG.format(bg=bg, rim=rim, glyph=GLYPHS[kind].format(fg=fg))
+# Frozen (saved state) tile: ice glass, frosted rim, icicles and a snowflake badge.
+# Six-armed snowflake centred on 0,0 (radius ~5), each arm with a small chevron
+FLAKE = ''.join(
+    f'<g transform="rotate({a})"><path d="M0 0V-4.6M-1.5 -3.4L0 -2.2L1.5 -3.4" fill="none" stroke="{{c}}" '
+    f'stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/></g>' for a in range(0, 360, 60))
+
+FROZEN_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 40 40">
+<defs>
+  <linearGradient id="ice" x1="0" y1="0" x2="0.35" y2="1">
+    <stop offset="0" stop-color="#c9efff" stop-opacity="0.55"/>
+    <stop offset="0.5" stop-color="#62c3ff" stop-opacity="0.32"/>
+    <stop offset="1" stop-color="#2f86d8" stop-opacity="0.42"/>
+  </linearGradient>
+  <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#ffffff" stop-opacity="0.85"/>
+    <stop offset="0.5" stop-color="#a8e6ff" stop-opacity="0.45"/>
+    <stop offset="1" stop-color="#6cc6ff" stop-opacity="0.65"/>
+  </linearGradient>
+  <linearGradient id="glyph" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#f2fbff"/><stop offset="1" stop-color="#9fdcff"/>
+  </linearGradient>
+  <radialGradient id="badge" cx="0.35" cy="0.3" r="0.8">
+    <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#cbeeff"/>
+  </radialGradient>
+</defs>
+<rect x="0.5" y="0.5" width="39" height="39" rx="9" fill="url(#ice)" stroke="url(#rim)" stroke-width="1"/>
+<!-- frost sheen along the top-left, like a glazed surface -->
+<path d="M3 13 Q4 4 13 3 L19 3 Q8 6 5 17 Z" fill="#ffffff" fill-opacity="0.16"/>
+<!-- icicles hanging from the top edge -->
+<path d="M9 0.8 l1.3 4.2 l1.3 -4.2 Z M24 0.8 l1 3.2 l1 -3.2 Z M30 0.8 l1.4 5 l1.4 -5 Z" fill="#e8f8ff" fill-opacity="0.75"/>
+{glyph}
+<!-- faint frost crack across the glyph -->
+<path d="M8 33 L13 28 L12 25 L16 21" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="0.7"/>
+<!-- sparkles -->
+<path d="M34 12 l0.6 1.6 l1.6 0.6 l-1.6 0.6 l-0.6 1.6 l-0.6 -1.6 l-1.6 -0.6 l1.6 -0.6 Z" fill="#ffffff" fill-opacity="0.9"/>
+<circle cx="6" cy="27" r="0.7" fill="#ffffff" fill-opacity="0.8"/>
+<!-- snowflake badge, bottom right -->
+<circle cx="32" cy="32" r="6.2" fill="url(#badge)" stroke="#5fbff7" stroke-width="0.9"/>
+<g transform="translate(32 32) scale(0.92)">{flake}</g>
+</svg>'''
+
+
+
+
+def tile_pixbuf(kind, active, frozen=False, size=40):
+    if frozen:
+        svg = FROZEN_SVG.format(size=size, glyph=GLYPHS[kind].format(fg='url(#glyph)'), flake=FLAKE.format(c='#1f8fe0'))
+    else:
+        fg = '#60cdff' if active else '#8f8f8f'
+        bg = 'rgba(96,205,255,0.13)' if active else 'rgba(255,255,255,0.05)'
+        rim = 'rgba(96,205,255,0.35)' if active else 'rgba(255,255,255,0.08)'
+        svg = TILE_SVG.format(bg=bg, rim=rim, glyph=GLYPHS[kind].format(fg=fg))
+        if size != 40:
+            svg = svg.replace('width="40" height="40"', f'width="{size}" height="{size}"', 1)
     loader = GdkPixbuf.PixbufLoader.new_with_type('svg')
     loader.write(svg.encode())
     loader.close()
@@ -427,11 +476,12 @@ class VmRow(Gtk.Box):
                 ctx.remove_class(c)
             ctx.add_class(cls)
             self.pill.set_text(text)
+            self.icon.set_from_pixbuf(tile_pixbuf(self.kind, key == libvirt.VIR_DOMAIN_RUNNING, frozen=key == 'saved'))
+            self.icon.set_tooltip_text('Frozen: memory saved to disk; Resume continues right here' if key == 'saved' else None)
         if state != self.state:
             running = state == libvirt.VIR_DOMAIN_RUNNING
             set_icon(self.power, 'system-shutdown-symbolic' if running else 'media-playback-start-symbolic')
             self.power.set_tooltip_text('Power options' if running else 'Start')
-            self.icon.set_from_pixbuf(tile_pixbuf(self.kind, running))
             self.spark.set_opacity(1.0 if running else 0.0)
             self.state = state
             if not running:
@@ -935,7 +985,8 @@ class ConsoleGrid(Gtk.ScrolledWindow):
         asleep.pack_start(wake, False, False, 0)
         screen.add_named(asleep, 'asleep')
         off = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
-        off.pack_start(Gtk.Image.new_from_pixbuf(tile_pixbuf(kind, False)), False, False, 0)
+        off_icon = Gtk.Image.new_from_pixbuf(tile_pixbuf(kind, False))
+        off.pack_start(off_icon, False, False, 0)
         off_label = Gtk.Label()
         off_label.get_style_context().add_class('tile-off')
         off.pack_start(off_label, False, False, 0)
@@ -957,6 +1008,7 @@ class ConsoleGrid(Gtk.ScrolledWindow):
         ev.add(box)
         ev.connect('button-release-event', lambda _w, e: e.button == 1 and self.app.open_console(name))
         return {'root': ev, 'screen': screen, 'image': image, 'off_label': off_label, 'start': start,
+                'off_icon': off_icon, 'kind': kind,
                 'pill': pill, 'state': None}
 
     def refresh_states(self):
@@ -979,7 +1031,9 @@ class ConsoleGrid(Gtk.ScrolledWindow):
                 if t['image'].get_pixbuf() is not None:
                     t['screen'].set_visible_child_name('live')
             else:
-                t['off_label'].set_text('Saved · resumes where it left off' if key == 'saved' else text)
+                t['off_label'].set_text('Frozen · resumes where it left off' if key == 'saved' else text)
+                t['off_icon'].set_from_pixbuf(tile_pixbuf(t['kind'], False, frozen=key == 'saved',
+                                                          size=96 if key == 'saved' else 40))
                 t['start'].set_label('Resume' if key == 'saved' else 'Start')
                 t['start'].set_visible(state == libvirt.VIR_DOMAIN_SHUTOFF)
                 t['screen'].set_visible_child_name('off')
