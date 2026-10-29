@@ -91,5 +91,20 @@ Live-lab timing remains a review item, including the previously reported roughly
 48 ms Consoles decode path, which is deferred from this UI change.
 
 VM power/control methods, console connection behavior and settings persistence
-were compared with the baseline and are unchanged. The branch is intended for a
-pull request and has not been merged or installed on the lab machine.
+were compared with the baseline and are unchanged.
+
+## Local installation verification
+
+On 2026-10-29, the UI patch was installed on the Linux lab machine using
+`Linux/manager/install.sh` and launched through the installed desktop entry.
+The installed source matched the independently validated copy byte for byte,
+and all 21 unit tests passed from the installed location. The compact List view
+and the Resources CPU and Memory charts were visually verified with live data.
+The application log reported no errors during verification.
+
+All nine VM states, running instance IDs and saved-state flags matched the
+pre-install snapshot: five running and four shut off. No VM power operations,
+guest sign-ins or clock changes were performed. The application was left open
+on Resources with the live CPU Activity chart selected. This verifies the
+installed UI; it does not establish live refresh timing. The branch remains
+unmerged pending review.
