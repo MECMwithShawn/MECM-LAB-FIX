@@ -70,7 +70,12 @@ The [1180-pixel timing report](measurements-1180.json) and
 [1024-pixel stress report](measurements-stress-1024.json) separate synchronous tick work,
 resource rendering and chart drawing. The stress run forces uncached redraws
 with nine running simulated VMs and 450 raw samples per series. Cached hover
-redraws reuse the plot surface. There is no new animation timer or polling loop.
+redraws reuse the plot surface when its time position is unchanged. GTK frame-clock
+callbacks now scroll the chart between measurements, with one sampling interval
+(about two seconds) of display latency. Hidden views do not redraw, disabled
+animations are respected, and telemetry polling remains unchanged. The time axis
+uses a fixed window to avoid startup zoom jumps. Scrolling stops when data stalls.
+The measurements below predate continuous scrolling and describe individual draws.
 
 Final 1024 × 900 stress run, in milliseconds:
 

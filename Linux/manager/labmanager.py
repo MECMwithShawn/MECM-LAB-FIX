@@ -1323,7 +1323,8 @@ class Timeline(Gtk.DrawingArea):
 
     CPU uses independently measured host utilization; memory uses host memory history.
     Disk/network remain directional and their aggregate is explicitly the lab total.
-    There is no animation timer or additional telemetry polling.
+    Frame-clock scrolling reveals recorded segments with one sampling interval
+    of display latency, without additional telemetry polling.
     """
     def __init__(self, view):
         super().__init__()
@@ -1335,11 +1336,24 @@ class Timeline(Gtk.DrawingArea):
         self.ymax_shown = None
         self._surface = self._cache_key = self._plot = None
         self._times = []
+        self._arrival = None
+        self._sample_stamp = None
+        self._frame_time = 0
+        self.add_tick_callback(self._animate)
         self.add_events(Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
         self.connect('motion-notify-event', lambda _w, e: self._hover(e.x))
         self.connect('leave-notify-event', lambda *_: self._hover(None))
         self.connect('draw', self._draw)
         self.get_accessible().set_name('Activity history')
+
+    def _animate(self, _widget, clock):
+        # GTK suspends frame callbacks while unmapped. Avoid work on hidden tabs
+        # and honor disabled animations (also used by the deterministic fixture).
+        if (self.view.active and self.get_settings().get_property('gtk-enable-animations')
+                and clock.get_frame_time() - self._frame_time >= 16000):
+            self._frame_time = clock.get_frame_time()
+            self.queue_draw()
+        return True
 
     def _hover(self, x):
         if x != self.hover_x:
@@ -1426,8 +1440,16 @@ class Timeline(Gtk.DrawingArea):
         if width < 150 or height < 100:
             return False
         scale = max(1, self.get_scale_factor())
+        stamps = self.view.sample_times
+        stamp = stamps[-1] if stamps else None
+        now = time.monotonic()
+        if stamp != self._sample_stamp:
+            self._sample_stamp, self._arrival = stamp, now
+        animated = self.get_settings().get_property('gtk-enable-animations')
+        elapsed = min(self.view.HIST_STEP, max(0, now - self._arrival)) if self._arrival is not None else 0
+        self._display_delay = self.view.HIST_STEP - elapsed if animated else 0
         key = (width, height, scale, self.mode, self.minutes, self.view.samples,
-               self.view.hover, self.view.focus, self.view.mem_total, self.ymax_shown)
+               self.view.hover, self.view.focus, self.view.mem_total, self._display_delay, self.ymax_shown)
         if self._surface is None or key != self._cache_key:
             if (self._surface is None or self._surface.get_width() != width * scale
                     or self._surface.get_height() != height * scale):
@@ -1460,8 +1482,11 @@ class Timeline(Gtk.DrawingArea):
 
         duration = max(0, times[-1] - times[0])
         requested = self.minutes * 60
-        span = min(requested, max(30, math.ceil(duration / 30) * 30))
-        end, start = times[-1], times[-1] - span
+        # A fixed time scale avoids the periodic zoom jumps of an expanding
+        # startup window. Clip the buffered newest segment at the right edge.
+        span = requested
+        end = times[-1] - getattr(self, '_display_delay', 0)
+        start = end - span
         xat = lambda i: left + pw * (times[i] - start) / span
         positions = [xat(i) for i in range(len(times))]
         if duration < requested - self.view.HIST_STEP:
