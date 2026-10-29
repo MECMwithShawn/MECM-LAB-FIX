@@ -157,8 +157,6 @@ stackswitcher button { padding: 2px 14px; min-height: 26px; }
 """
 
 
-TILE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
-<rect x="0.5" y="0.5" width="39" height="39" rx="9" fill="{bg}" stroke="{rim}"/>{glyph}</svg>'''
 GLYPHS = {
     'server': '''<rect x="11" y="9" width="18" height="9" rx="2" fill="none" stroke="{fg}" stroke-width="1.8"/>
 <rect x="11" y="22" width="18" height="9" rx="2" fill="none" stroke="{fg}" stroke-width="1.8"/>
@@ -213,16 +211,60 @@ FROZEN_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{
 
 
 
+# Running and off tiles in the same glass style: running = lit blue with a green "on" badge,
+# off = dark slate with a grey power badge.
+STATE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 40 40">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
+    <stop offset="0" stop-color="{bg0}" stop-opacity="{bgo0}"/>
+    <stop offset="1" stop-color="{bg1}" stop-opacity="{bgo1}"/>
+  </linearGradient>
+  <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="{rim0}" stop-opacity="{rimo0}"/>
+    <stop offset="1" stop-color="{rim1}" stop-opacity="{rimo1}"/>
+  </linearGradient>
+  <linearGradient id="glyph" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="{g0}"/><stop offset="1" stop-color="{g1}"/>
+  </linearGradient>
+  <radialGradient id="glow" cx="0.5" cy="0.45" r="0.6">
+    <stop offset="0" stop-color="{glow}" stop-opacity="{glowo}"/><stop offset="1" stop-color="{glow}" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="badge" cx="0.35" cy="0.3" r="0.8">
+    <stop offset="0" stop-color="{b0}"/><stop offset="1" stop-color="{b1}"/>
+  </radialGradient>
+</defs>
+<rect x="0.5" y="0.5" width="39" height="39" rx="9" fill="url(#bg)" stroke="url(#rim)" stroke-width="1"/>
+<rect x="0.5" y="0.5" width="39" height="39" rx="9" fill="url(#glow)"/>
+<path d="M3 13 Q4 4 13 3 L19 3 Q8 6 5 17 Z" fill="#ffffff" fill-opacity="{sheen}"/>
+{glyph}
+<circle cx="32" cy="32" r="6.2" fill="url(#badge)" stroke="{bstroke}" stroke-width="0.9"/>
+<g transform="translate(32 32)">{badge}</g>
+</svg>'''
+
+# running: a lit "on" dot with a pulse ring
+RUN_BADGE = ('<circle r="4.3" fill="none" stroke="#ffffff" stroke-opacity="0.75" stroke-width="0.9"/>'
+             '<circle r="2.4" fill="#ffffff"/>')
+# off: a power symbol
+OFF_BADGE = ('<path d="M-2.6 -2.2 A3.5 3.5 0 1 0 2.6 -2.2" fill="none" stroke="#d9dee4" stroke-width="1.35" '
+             'stroke-linecap="round"/><path d="M0 -4.2 V-0.4" stroke="#d9dee4" stroke-width="1.35" stroke-linecap="round"/>')
+
+STYLES = {
+    'running': dict(bg0='#2fa8ff', bgo0=0.42, bg1='#0a3f8f', bgo1=0.62, rim0='#8fdcff', rimo0=0.9,
+                    rim1='#1f86e8', rimo1=0.8, g0='#ffffff', g1='#7fd8ff', glow='#3fb8ff', glowo=0.5,
+                    sheen=0.14, b0='#7ff0a0', b1='#1fae55', bstroke='#0f7a3a', badge=RUN_BADGE),
+    'off': dict(bg0='#9aa6b2', bgo0=0.14, bg1='#3a4048', bgo1=0.30, rim0='#ffffff', rimo0=0.22,
+                rim1='#ffffff', rimo1=0.08, g0='#a9b1ba', g1='#6f7882', glow='#000000', glowo=0.0,
+                sheen=0.06, b0='#6c747d', b1='#3d434a', bstroke='#2a2f35', badge=OFF_BADGE),
+}
+
+
+
 def tile_pixbuf(kind, active, frozen=False, size=40):
     if frozen:
         svg = FROZEN_SVG.format(size=size, glyph=GLYPHS[kind].format(fg='url(#glyph)'), flake=FLAKE.format(c='#1f8fe0'))
     else:
-        fg = '#60cdff' if active else '#8f8f8f'
-        bg = 'rgba(96,205,255,0.13)' if active else 'rgba(255,255,255,0.05)'
-        rim = 'rgba(96,205,255,0.35)' if active else 'rgba(255,255,255,0.08)'
-        svg = TILE_SVG.format(bg=bg, rim=rim, glyph=GLYPHS[kind].format(fg=fg))
-        if size != 40:
-            svg = svg.replace('width="40" height="40"', f'width="{size}" height="{size}"', 1)
+        svg = STATE_SVG.format(size=size, glyph=GLYPHS[kind].format(fg='url(#glyph)'),
+                               **STYLES['running' if active else 'off'])
     loader = GdkPixbuf.PixbufLoader.new_with_type('svg')
     loader.write(svg.encode())
     loader.close()
@@ -985,7 +1027,7 @@ class ConsoleGrid(Gtk.ScrolledWindow):
         asleep.pack_start(wake, False, False, 0)
         screen.add_named(asleep, 'asleep')
         off = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
-        off_icon = Gtk.Image.new_from_pixbuf(tile_pixbuf(kind, False))
+        off_icon = Gtk.Image.new_from_pixbuf(tile_pixbuf(kind, False, size=96))
         off.pack_start(off_icon, False, False, 0)
         off_label = Gtk.Label()
         off_label.get_style_context().add_class('tile-off')
@@ -1032,8 +1074,7 @@ class ConsoleGrid(Gtk.ScrolledWindow):
                     t['screen'].set_visible_child_name('live')
             else:
                 t['off_label'].set_text('Frozen · resumes where it left off' if key == 'saved' else text)
-                t['off_icon'].set_from_pixbuf(tile_pixbuf(t['kind'], False, frozen=key == 'saved',
-                                                          size=96 if key == 'saved' else 40))
+                t['off_icon'].set_from_pixbuf(tile_pixbuf(t['kind'], False, frozen=key == 'saved', size=96))
                 t['start'].set_label('Resume' if key == 'saved' else 'Start')
                 t['start'].set_visible(state == libvirt.VIR_DOMAIN_SHUTOFF)
                 t['screen'].set_visible_child_name('off')
