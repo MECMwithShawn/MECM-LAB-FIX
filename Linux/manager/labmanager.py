@@ -578,6 +578,9 @@ def nice_ceil(x):
     return 10 * p
 
 
+WIN_RELEASE = {19045: '22H2', 22000: '21H2', 22621: '22H2', 22631: '23H2', 26100: '24H2', 26200: '25H2'}
+
+
 def os_label(info):
     """'Win 11 24H2 · 26100' / 'Server 2025 · 26100' from guestInfo OS keys."""
     pretty = info.get('os.pretty-name', '')
@@ -591,7 +594,7 @@ def os_label(info):
         name = {17763: 'Server 2019', 20348: 'Server 2022', 26100: 'Server 2025'}.get(build) or \
             re.sub(r'.*(Server \d{4}).*', r'\1', pretty)
         return f'{name} · {build}' if build else name
-    release = {19045: '22H2', 22000: '21H2', 22621: '22H2', 22631: '23H2', 26100: '24H2', 26200: '25H2'}.get(build, '')
+    release = WIN_RELEASE.get(build, '')
     win = 'Win 11' if build >= 22000 else 'Win 10'
     return f'{win} {release} · {build}'.replace('  ', ' ') if build else pretty
 
@@ -666,6 +669,18 @@ def qemu_started(name):
         return BOOT_TIME + int(fields[19]) / CLK_TCK
     except (OSError, ValueError, IndexError):
         return None
+
+
+def qcow2_virtual_size(path):
+    """Virtual disk size from a qcow2 header (bytes 24-31), without libvirt or qemu-img."""
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(32)
+        if head[:4] == b'QFI\xfb':
+            return int.from_bytes(head[24:32], 'big')
+    except OSError:
+        pass
+    return None
 
 
 def save_image(name):
@@ -1207,7 +1222,7 @@ class Timeline(Gtk.DrawingArea):
         # x labels
         label(f'−{self.minutes} min', px0, h - 9, 'left')
         label('now', px1, h - 9, 'right')
-        label(f'−{self.minutes // 2 if self.minutes == 15 else 2.5:g} min', px0 + pw / 2, h - 9, 'center')
+        label(f'−{self.minutes / 2:g} min', px0 + pw / 2, h - 9, 'center')
 
         def stacked(ymax, fmt):
             for k in (0.25, 0.5, 0.75, 1):
@@ -1252,7 +1267,7 @@ class Timeline(Gtk.DrawingArea):
             if kind == 'pct':
                 host = extra['host'] if extra.get('host') else [0.0] * n
                 peak = max(host + [0.0])
-                ymax = max(5.0, nice_ceil(peak * 1.15))
+                ymax = min(100.0, max(5.0, nice_ceil(peak * 1.15)))
                 fmt = lambda v: f'{v:g}%'
             else:
                 ymax = float(view.mem_total or 1)
@@ -1498,7 +1513,7 @@ class RamBar(Gtk.DrawingArea):
         self.hits.append((x, x + oth, 'other', f'Linux & apps: {fmt_bytes(d["other"])}'))
         x += oth
         used_end = x
-        self.hits.append((x, w, 'free', f'Free: {fmt_bytes(d["avail"])}'))
+        free_hit = (x, w, 'free', f'Free: {fmt_bytes(d["avail"])}')
         cr.rectangle(0, 0.5, w, 1)
         cr.set_source_rgba(1, 1, 1, 0.12)
         cr.fill()
@@ -1538,6 +1553,7 @@ class RamBar(Gtk.DrawingArea):
                 PangoCairo.show_layout(cr, lay)
             self.hits.append((gx, gx + gw, name, f'{short(name)} is frozen: resuming needs {fmt_bytes(b)}'))
             gx += gw + 4
+        self.hits.append(free_hit)  # after the ghosts, so hovering a ghost finds the ghost
         cr.set_dash([])
         # label lane
         x = 0.0
@@ -1567,7 +1583,10 @@ def list_checkpoints(dom):
     for line in out.splitlines()[2:]:
         parts = line.split()
         if len(parts) >= 5:
-            rows.append((parts[1], f'{parts[-4]} {parts[-3]}' if re.match(r'\d{4}-', parts[-4]) else ''))
+            if re.match(r'\d{4}-', parts[-4]):
+                rows.append((' '.join(parts[1:-6]), f'{parts[-4]} {parts[-3]}'))
+            else:
+                rows.append((parts[1], ''))
     return rows
 
 
@@ -1630,19 +1649,14 @@ class GuestProbe:
                 continue
             kind, name = job
             self.in_flight.add(name)
-            box = {}
-            helper = threading.Thread(target=self._run, args=(conn, kind, name, box), daemon=True)
+            helper = threading.Thread(target=self._run, args=(conn, kind, name, self.due.get(job)), daemon=True)
             helper.start()
-            helper.join(10)  # a stuck agent call finishes (and reports) on its own later
-            every = self.GUEST_EVERY if kind == 'guest' else self.CKPT_EVERY
-            if box.get('err'):
-                self.fails[name] = self.fails.get(name, 0) + 1
-                every = self.BACKOFF if self.fails[name] >= 2 else every
-            elif 'data' in box:
-                self.fails[name] = 0
-            self.due[(kind, name)] = time.monotonic() + every
+            helper.join(10)  # a slow agent keeps going on its own; _run does the bookkeeping when it ends
+            if helper.is_alive():
+                self.due[job] = time.monotonic() + self.BACKOFF  # don't pick this VM again meanwhile
 
-    def _run(self, conn, kind, name, box):
+    def _run(self, conn, kind, name, due_at_start):
+        box = {}
         try:
             dom = conn.lookupByName(name)
             if kind == 'ckpt':
@@ -1664,10 +1678,19 @@ class GuestProbe:
                     data['drift'] = None
             box['data'] = data
             GLib.idle_add(self.app.on_probe, name, kind, data, None)
-        except (libvirt.libvirtError, subprocess.CalledProcessError, OSError, RuntimeError) as e:
+        except Exception as e:  # any failure counts against this job, never kills the probe
             box['err'] = e
             GLib.idle_add(self.app.on_probe, name, kind, None, e)
         finally:
+            job = (kind, name)
+            every = self.GUEST_EVERY if kind == 'guest' else self.CKPT_EVERY
+            if 'err' in box:
+                self.fails[job] = self.fails.get(job, 0) + 1
+                every = self.BACKOFF if self.fails[job] >= 2 else every
+            else:
+                self.fails[job] = 0
+            if not (self.due.get(job) == 0 and due_at_start != 0):  # keep a poke() that came in meanwhile
+                self.due[job] = time.monotonic() + every
             self.in_flight.discard(name)
 
 
@@ -1724,6 +1747,7 @@ class VmRow(Gtk.Box):
         self.last_used = None
         self.saved_img = None
         self.disk_used = 0
+        self.capacity = None  # virtual disk size
         self._xml_tick = 0
 
         # Row A
@@ -1791,8 +1815,7 @@ class VmRow(Gtk.Box):
         cbox.pack_start(self.c_val, False, False, 0)
         self.f_c = self._fact('C: drive', 156, widget=cbox)
         self.f_ck = self._fact('Checkpoints', 104, last=True)
-        self.pxe_note = styled(Gtk.Label(xalign=0, no_show_all=True,
-                                         label='PXE target · empty 512 GB disk · boots from the network'), 'fact-val', 'muted')
+        self.pxe_note = styled(Gtk.Label(xalign=0, no_show_all=True), 'fact-val', 'muted')
         self.pxe_note.set_margin_start(52)
         self.pxe_note.set_margin_top(8)
         self.pack_start(self.pxe_note, False, False, 0)
@@ -1812,8 +1835,8 @@ class VmRow(Gtk.Box):
         self.d_sto = self._detail_col(detail, 'Storage')
         self.rev.connect('notify::child-revealed', lambda *_: self.fill_detail())
 
-        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)  # double-click on the card toggles the details
-        self.connect('button-press-event', self._on_press)
+        self.press = Gtk.GestureMultiPress.new(self)  # double-click on the card toggles the details
+        self.press.connect('pressed', lambda _g, n, _x, _y: n == 2 and self.set_expanded(not self.rev.get_reveal_child()))
         if self.name in load_settings().get('expanded', []):
             self.rev.set_reveal_child(True)
             set_icon(self.chevron, 'pan-up-symbolic')
@@ -1859,11 +1882,6 @@ class VmRow(Gtk.Box):
             set_text(vl, v)
             set_classes(vl, {cls} if cls else set(), ('bad', 'muted'))
 
-    def _on_press(self, _w, event):
-        if event.type == Gdk.EventType._2BUTTON_PRESS and event.button == 1:
-            self.set_expanded(not self.rev.get_reveal_child())
-        return False
-
     def set_expanded(self, on):
         self.rev.set_reveal_child(on)
         set_icon(self.chevron, 'pan-up-symbolic' if on else 'pan-down-symbolic')
@@ -1885,14 +1903,19 @@ class VmRow(Gtk.Box):
         self.agent = self.facts['agent']
         path = self.facts.get('disk')
         if path:
+            self.capacity = qcow2_virtual_size(path) or self.capacity
             try:
                 st = os.stat(path)
                 self.disk_used = st.st_blocks * 512
-                if not self.running:
+                if self.state == libvirt.VIR_DOMAIN_SHUTOFF:
                     self.last_used = st.st_mtime
             except OSError:
                 pass
         self.saved_img = save_image(self.name) if self.key == 'saved' else None
+
+    @property
+    def capacity_text(self):
+        return fmt_bytes(self.capacity, 0) if self.capacity else '?'
 
     @property
     def empty_disk(self):
@@ -1947,13 +1970,18 @@ class VmRow(Gtk.Box):
                                   (max(0, r['rss'] - assigned) / scale, (1, 1, 1, 0.35))])
                 set_text(self.net_val, f'↓↑ {fmt_rate(r["rx"] + r["tx"])}')
                 set_text(self.disk_val, f'R/W {fmt_rate(r["rd"] + r["wr"])}')
-            elif not self.cpu_val.get_text():
-                set_text(self.cpu_val, '…')
-                set_text(self.mem_val, f'{assigned / GB:g} GB')
+            else:
+                paused = state == libvirt.VIR_DOMAIN_PAUSED
+                set_text(self.cpu_val, 'Paused' if paused else '…')
+                set_text(self.mem_val, f'{r["rss"] / GB:.1f} / {assigned / GB:g} GB' if r and 'rss' in r else f'{assigned / GB:g} GB')
+                set_text(self.net_val, '↓↑ —')
+                set_text(self.disk_val, 'R/W —')
+                if paused:
+                    self.spark.clear()
         else:
             if self.empty_disk:
                 set_text(self.off_sum, 'Empty disk · PXE / OSD target')
-                set_text(self.off_sub, f'{vcpus} vCPU · {assigned / GB:g} GB · 512 GB virtual')
+                set_text(self.off_sub, f'{vcpus} vCPU · {assigned / GB:g} GB · {self.capacity_text} virtual')
             elif key == 'saved':
                 img = self.saved_img
                 set_text(self.off_sum, f'Frozen {fmt_ago(img[1])}' if img else 'Frozen')
@@ -1994,6 +2022,7 @@ class VmRow(Gtk.Box):
         self.facts_box.set_visible(not pxe)
         self.pxe_note.set_visible(pxe)
         if pxe:
+            set_text(self.pxe_note, f'PXE target · empty {self.capacity_text} disk · boots from the network')
             return
         parts, tips = [], []
         for net, ip, src in self.addresses():
@@ -2074,7 +2103,7 @@ class VmRow(Gtk.Box):
         if c and c[1] and c[0] / c[1] >= 0.90:
             out.append(('warn', f'C: {fmt_bytes(c[1] - c[0], 0)} free', 'The Windows system drive is almost full.', None))
         if (self.agent and self.up_since and time.time() - self.up_since > 180
-                and self.app.probe.fails.get(self.name, 0) >= 2):
+                and self.app.probe.fails.get(('guest', self.name), 0) >= 2):
             out.append(('warn', 'Guest tools not answering', 'The QEMU guest agent is installed but not replying.', None))
         return out
 
@@ -2123,8 +2152,8 @@ class VmRow(Gtk.Box):
             self.os_chip.set_tooltip_text(f'{info.get("os.pretty-name", "")}\nHost name {host}' if host else
                                           info.get('os.pretty-name', ''))
             self.os_chip.show()
-        self.refresh_facts(self.running)
-        self.refresh_chips(self.running)
+        self.refresh_facts(self.live)
+        self.refresh_chips(self.live)
 
     def refresh_os_chip(self, live):
         if live and not self.agent:
@@ -2133,13 +2162,12 @@ class VmRow(Gtk.Box):
             self.os_chip.set_tooltip_text('Install the virtio-win guest tools: until then safe shutdown uses the power '
                                           'button and Windows details (IPs, users, C:) aren\'t available.')
             self.os_chip.show()
-        elif not self.guest or not os_label((self.guest or {}).get('info') or {}):
-            if not live and self.os_chip.get_text() == 'No guest tools':
-                self.os_chip.hide()
+        elif self.os_chip.get_text() == 'No guest tools':
+            self.os_chip.hide()
 
     def apply_checkpoints(self, rows):
         self.checkpoints = rows
-        self.refresh_facts(self.running)
+        self.refresh_facts(self.live)
 
     def fill_detail(self):
         if not self.rev.get_child_revealed() and not self.rev.get_reveal_child():
@@ -2150,7 +2178,7 @@ class VmRow(Gtk.Box):
         sys_rows = []
         if self.guest and info.get('os.pretty-name'):
             build = info.get('os.kernel-release', '')
-            rel = os_label(info).split(' · ')[0].split()[-1] if 'Win' in os_label(info) else ''
+            rel = WIN_RELEASE.get(int(build), '') if str(build).isdigit() and 'Server' not in info.get('os.pretty-name', '') else ''
             sys_rows += [('Windows', info.get('os.pretty-name', ''), None),
                          ('Build', f'{build}' + (f' · {rel}' if rel else ''), None),
                          ('Host name', info.get('hostname', '—'), None)]
@@ -2212,7 +2240,7 @@ class VmRow(Gtk.Box):
                     pass
         if f.get('disk'):
             sto.append(('Image', os.path.basename(f['disk']), None))
-        sto.append(('Virtual', '512 GB' if f.get('disk') else '—', None))
+        sto.append(('Virtual', self.capacity_text if f.get('disk') else '—', None))
         sto.append(('On host', fmt_bytes(self.disk_used), None))
         if live and r:
             sto.append(('Activity', f'R {fmt_rate(r.get("rd", 0))} · W {fmt_rate(r.get("wr", 0))}', None))
@@ -2238,6 +2266,10 @@ class VmRow(Gtk.Box):
     @property
     def running(self):
         return self.state == libvirt.VIR_DOMAIN_RUNNING
+
+    @property
+    def live(self):
+        return self.state in (libvirt.VIR_DOMAIN_RUNNING, libvirt.VIR_DOMAIN_PAUSED)
 
     def toggle_power(self):
         if self.state == libvirt.VIR_DOMAIN_SHUTOFF:
@@ -3269,7 +3301,9 @@ class ResourceView(Gtk.ScrolledWindow):
         self._fetching = True
 
         def fetch():
-            return ({d.name(): (d, s) for d, s in self.app.conn.getAllDomainStats(self.STATS, 0)}, read_host())
+            # NOWAIT: a VM busy restoring a saved state doesn't stall everyone's numbers
+            stats = self.app.conn.getAllDomainStats(self.STATS, libvirt.VIR_CONNECT_GET_ALL_DOMAINS_STATS_NOWAIT)
+            return {d.name(): (d, s) for d, s in stats}, read_host(), time.monotonic()
 
         def done(res, err):
             self._fetching = False
@@ -3279,14 +3313,13 @@ class ResourceView(Gtk.ScrolledWindow):
             return False
         run_bg(fetch, done)
 
-    def ingest(self, stats, host):
+    def ingest(self, stats, host, now):
         if self.temp_path:
             try:
                 with open(self.temp_path) as f:
                     self.temps.append(int(f.read()) / 1000)
             except (OSError, ValueError):
                 pass
-        now = time.monotonic()
         prev, self.prev = self.prev, (now, host, stats)
         if not prev:
             return
@@ -3294,7 +3327,10 @@ class ResourceView(Gtk.ScrolledWindow):
         rates = {}
         nets = {net: [0.0, 0.0] for net in NET_KIND}
         for name in self.names:
-            if name not in stats:
+            if name not in stats:  # deleted / undefined meanwhile: keep its history aligned
+                for dq in self.hist[name].values():
+                    dq.append(0.0)
+                self.ran[name] = self.ran.get(name, self.HIST + 1) + 1
                 continue
             dom, s = stats[name]
             row = self.app.rows.get(name)
@@ -3303,12 +3339,13 @@ class ResourceView(Gtk.ScrolledWindow):
             r = {'running': s.get('state.state') == libvirt.VIR_DOMAIN_RUNNING,
                  'vcpus': s.get('vcpu.current') or facts.get('vcpus') or 1,
                  'assigned': (s.get('balloon.current') or 0) * 1024 or facts.get('mem', 0)}
+            if s.get('state.state', libvirt.VIR_DOMAIN_SHUTOFF) != libvirt.VIR_DOMAIN_SHUTOFF:
+                r['rss'] = s.get('balloon.rss', 0) * 1024  # paused / crashed VMs still hold their RAM
             if r['running'] and old.get('state.state') == libvirt.VIR_DOMAIN_RUNNING:
                 d = lambda k: max(0, s.get(k, 0) - old.get(k, 0)) / dt
                 r['cpu'] = d('cpu.time') / 1e9  # threads busy
                 r['vcpu_t'] = sum(d(f'vcpu.{i}.time') for i in range(r['vcpus'])) / 1e9
                 r['cpu_pct'] = min(100.0, r['cpu'] / r['vcpus'] * 100)
-                r['rss'] = s.get('balloon.rss', 0) * 1024
                 nb = s.get('block.count', 0)
                 r['rd'] = sum(d(f'block.{i}.rd.bytes') for i in range(nb))
                 r['wr'] = sum(d(f'block.{i}.wr.bytes') for i in range(nb))
@@ -3355,7 +3392,8 @@ class ResourceView(Gtk.ScrolledWindow):
         path = next((r.facts.get('disk') for r in self.app.rows.values() if r.facts.get('disk')), None)
         try:
             fs = os.statvfs(os.path.dirname(path) if path else '/')
-            return fs.f_blocks * fs.f_frsize, fs.f_bavail * fs.f_frsize
+            # total = what you can use (minus root's reserve), so the ring adds up
+            return (fs.f_blocks - fs.f_bfree + fs.f_bavail) * fs.f_frsize, fs.f_bavail * fs.f_frsize
         except OSError:
             return 1, 0
 
@@ -3374,21 +3412,23 @@ class ResourceView(Gtk.ScrolledWindow):
 
     def totals(self):
         rows = self.app.rows
-        t = dict(cpu=0.0, vcpu_t=0.0, vcpus=0, rss=0, assigned=0, rd=0.0, wr=0.0, rx=0.0, tx=0.0, running=0)
+        t = dict(cpu=0.0, vcpu_t=0.0, vcpus=0, rss=0, assigned=0, overhead=0, rd=0.0, wr=0.0, rx=0.0, tx=0.0, running=0)
         for name, r in self.rates.items():
+            if 'rss' in r:  # holds host RAM: running, paused or crashed
+                t['rss'] += r['rss']
+                t['assigned'] += r['assigned']
+                t['overhead'] += max(0, r['rss'] - r['assigned'])
             if 'cpu' in r:
-                for k in ('cpu', 'vcpu_t', 'rss', 'rd', 'wr', 'rx', 'tx'):
+                for k in ('cpu', 'vcpu_t', 'rd', 'wr', 'rx', 'tx'):
                     t[k] += r[k]
                 t['vcpus'] += r['vcpus']
-                t['assigned'] += r['assigned']
                 t['running'] += 1
         t['disk'] = sum(r.disk_used for r in rows.values())
         t['frozen'] = [(n, rows[n].facts.get('mem', 0)) for n in self.names if n in rows and rows[n].key == 'saved']
-        t['off'] = sum(1 for n in self.names if n in rows and not rows[n].running and rows[n].key != 'saved')
+        t['off'] = sum(1 for n in self.names if n in rows and rows[n].key == libvirt.VIR_DOMAIN_SHUTOFF)
         mem = self.host['mem']
         t['total'], t['avail'] = mem['MemTotal'], mem['MemAvailable']
         t['other'] = max(0, t['total'] - t['avail'] - t['rss'])
-        t['overhead'] = max(0, t['rss'] - t['assigned'])
         t['room'] = int(max(0, t['avail'] - self.RESERVE) // (4.3 * GB))
         t['fs_total'], t['fs_free'] = self.disk_fs()
         t['host_pct'] = self.host['pct']
@@ -3473,7 +3513,7 @@ class ResourceView(Gtk.ScrolledWindow):
                     f'{fmt_bytes(t["overhead"], 0)} QEMU overhead · {fmt_bytes(t["avail"])} left'
                     + ('' if swap else ' · no swap, so if RAM runs out Linux stops the biggest VM (CM1)'))
             out.append((sev, 'Memory' if sev == 'ok' else 'Memory is running low', body,
-                        ('Freeze lab', self.app.freeze_lab) if sev != 'ok' else None))
+                        ('Freeze lab', self.app.freeze_lab) if sev != 'ok' and not self.app.lab_run else None))
             emu = max(0.0, t['cpu'] - t['vcpu_t'])
             out.append(('info', f'Lab uses {t["lab_pct"]:.1f}% of the CPU',
                         f'{t["cpu"]:.2f} of {self.ncpu} threads busy; {emu:.2f} of that is QEMU overhead', None))
@@ -3557,7 +3597,7 @@ class ResourceView(Gtk.ScrolledWindow):
             if name == 'Other':
                 b.set_visible(mode in ('cpu', 'mem'))
                 b.get_parent().set_visible(mode in ('cpu', 'mem'))
-                v = self.hhist['host'][-1] - sum(self.hist[n]['cpu'][-1] for n in self.names) if mode == 'cpu' \
+                v = max(0.0, self.hhist['host'][-1] - sum(self.hist[n]['cpu'][-1] for n in self.names)) if mode == 'cpu' \
                     else self.hhist['other_mem'][-1]
                 set_text(lbl, f'Other host  {v:.1f}%' if mode == 'cpu' else f'Linux & apps  {fmt_bytes(v)}')
                 continue
@@ -3574,7 +3614,7 @@ class ResourceView(Gtk.ScrolledWindow):
         set_text(self.scale_tag, scale)
 
     def render_memory(self, t):
-        vms = [(n, self.rates[n]['assigned'] if self.rates[n]['rss'] >= self.rates[n]['assigned'] else self.rates[n]['rss'])
+        vms = [(n, min(self.rates[n]['rss'], self.rates[n]['assigned']))
                for n in self.names if n in self.rates and 'rss' in self.rates[n]]
         self.rambar.set({'total': t['total'], 'vms': vms, 'overhead': t['overhead'], 'other': t['other'],
                          'avail': t['avail'], 'reserve': self.RESERVE, 'frozen': t['frozen']})
@@ -3633,8 +3673,10 @@ class ResourceView(Gtk.ScrolledWindow):
                     status = f'Frozen {fmt_ago(row.saved_img[1])}' if row and row.saved_img else 'Frozen'
                 elif key == libvirt.VIR_DOMAIN_PAUSED:
                     status = 'Paused'
-                else:
+                elif key == libvirt.VIR_DOMAIN_SHUTOFF:
                     status = f'Off · last used {fmt_ago(row.last_used)}' if row and row.last_used else 'Off'
+                else:
+                    status = STATE_TEXT.get(key, ('Unknown',))[0]
                 set_text(tr['status'], status)
                 set_text(tr['cpu'][0], '—')
                 set_text(tr['cpu'][1], f'{vcpus} vCPU')
@@ -3645,10 +3687,11 @@ class ResourceView(Gtk.ScrolledWindow):
                     set_text(tr[k][1], '')
             used = row.disk_used if row else 0
             set_text(tr['dsize'], fmt_bytes(used) if used else '—')
-            tr['dbar'].set([(used / (512 * GB), (*vm_rgb(name), 0.9))])
+            cap = (row.capacity if row else None) or 512 * GB
+            tr['dbar'].set([(used / cap, (*vm_rgb(name), 0.9))])
             ck = row.checkpoints if row else None
             sub = ('+ ' + fmt_bytes(row.saved_img[0]) + ' saved RAM') if row and key == 'saved' and row.saved_img else \
-                'of 512 GB' + (f' · {len(ck)} checkpoint{"s" if len(ck) != 1 else ""}' if ck else '')
+                f'of {fmt_bytes(cap, 0)}' + (f' · {len(ck)} checkpoint{"s" if len(ck) != 1 else ""}' if ck else '')
             set_text(tr['dsub'], sub)
         c = self.total_cells
         set_text(c[0][1], f'{t["running"]} running')
@@ -3771,8 +3814,8 @@ class LabManager:
         if self.gapp:
             self.gapp.add_window(win)
         GLib.timeout_add(2000, self.tick)
-        self.tick()
         win.show_all()
+        self.tick()
         view = load_settings().get('view')
         if view in ('consoles', 'resources'):
             win.set_default_size(1180, 820)
@@ -3831,7 +3874,7 @@ class LabManager:
             return False
         if kind == 'ckpt':
             row.apply_checkpoints(data)
-        elif row.running:
+        elif row.live:
             row.apply_guest(data)
         return False
 
@@ -4049,6 +4092,9 @@ class LabManager:
         run_bg(work, done)
 
     def freeze_lab(self):
+        if self.lab_run:
+            self.toast.show('Wait for the current lab run to finish', 3)
+            return
         running = [n for n in reversed(START_ORDER) if n in self.rows and self.rows[n].running]
         running += [n for n, r in self.rows.items() if r.running and n not in running]
         if not running:
