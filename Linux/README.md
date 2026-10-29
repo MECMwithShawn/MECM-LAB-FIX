@@ -177,6 +177,14 @@ A cleaner front end than virt-manager for this lab:
   the screens stay on after that. Previews come from libvirt
   screenshots, not SPICE, so they don't take a VM's one viewer slot: an open console keeps working.
   The app remembers which view you used last.
+- **Resources view:** what the lab costs the host. Cards for the host's **processor**, **memory**
+  and **storage** show the lab's share next to everything else (and what's free). An **Impact**
+  panel spells it out: the lab's CPU share and how much of it is virtualization overhead, the RAM the
+  running VMs hold (QEMU overhead included) and what's left, vCPU/RAM overcommit, how many more
+  4 GB clients fit, and a warning when the host has no swap. A per-VM table lists CPU (of its vCPUs
+  and of the host), host RAM, disk read/write, network and disk-image size, with a total row.
+  Memory is host-side (each VM's QEMU process); Windows' own usage inside a VM would need a
+  virtio balloon device, which these VMs don't have.
 - **Console:** a slim header (VM name, role, Ctrl+Alt+Del, resolution, power, full screen) over
   the VM. The resolution button offers **Auto** (Windows follows the window size) or a fixed
   1280×720 … 2560×1440: the window resizes to fit that size, like Hyper-V's console, or fills the

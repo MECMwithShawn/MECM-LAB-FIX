@@ -7,6 +7,8 @@ Main window, two views:
   (like the physical buttons, confirmed first).
 - Consoles: live previews of every VM from libvirt screenshots, which don't take the VM's one SPICE
   viewer slot; click one to open its console.
+- Resources: host CPU / memory / storage with the lab's share, the lab's impact in plain words
+  (overhead, overcommit, headroom) and a per-VM table of CPU, host RAM, disk and network use.
 "Start lab" boots DC1 -> GW1 -> CM1 -> CLIENT1-4 in order,
 shows its progress, can be cancelled, and skips any VM you start or stop yourself meanwhile.
 Console: a slim header (VM name, Ctrl+Alt+Del, resolution, power, full screen) over the SPICE
@@ -153,6 +155,13 @@ button.res { font-feature-settings: "tnum"; }
 .tile-name { font-weight: 600; font-size: 13px; color: #ffffff; }
 .tile-off { color: #8a8a8a; font-size: 12px; }
 stackswitcher button { padding: 2px 14px; min-height: 26px; }
+.res-head { font-size: 11px; font-weight: 600; color: #8a8a8a; margin-bottom: 4px; }
+.res-cell { padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+.res-main { font-size: 13px; color: #f0f0f0; font-feature-settings: "tnum"; }
+.res-total { font-size: 13px; color: #60cdff; font-weight: 600; font-feature-settings: "tnum"; }
+.res-sub { font-size: 11px; color: #9a9a9a; font-feature-settings: "tnum"; }
+.res-big { font-size: 20px; font-weight: 600; color: #ffffff; font-feature-settings: "tnum"; }
+.impact { font-size: 12px; color: #d8d8d8; }
 .fs-bar { background: rgba(32,32,32,0.92); border-radius: 0 0 8px 8px; padding: 4px 8px; }
 """
 
@@ -1143,6 +1152,334 @@ class ConsoleGrid(Gtk.ScrolledWindow):
         self._stop.set()
 
 
+def fmt_bytes(n, digits=1):
+    for unit in ('B', 'KB', 'MB', 'GB', 'TB'):
+        if abs(n) < 1024 or unit == 'TB':
+            return f'{n:.0f} {unit}' if unit in ('B', 'KB') else f'{n:.{digits}f} {unit}'
+        n /= 1024
+
+
+def fmt_rate(n):
+    return fmt_bytes(max(0, n)) + '/s'
+
+
+def read_host():
+    """Host CPU counters, memory and swap from /proc."""
+    with open('/proc/stat') as f:
+        v = [int(x) for x in f.readline().split()[1:9]]
+    mem = {}
+    with open('/proc/meminfo') as f:
+        for line in f:
+            k, val = line.split(':')
+            mem[k] = int(val.split()[0]) * 1024
+    return {'busy': sum(v) - v[3] - v[4], 'total': sum(v), 'mem': mem}
+
+
+def cpu_model():
+    try:
+        with open('/proc/cpuinfo') as f:
+            for line in f:
+                if line.startswith('model name'):
+                    return re.sub(r'\((R|TM)\)|\bCPU\b|@.*', '', line.split(':', 1)[1]).split()
+    except OSError:
+        pass
+    return []
+
+
+class Meter(Gtk.DrawingArea):
+    """A rounded bar split into coloured segments: [(fraction, (r, g, b, a)), ...]."""
+    def __init__(self, height=10):
+        super().__init__()
+        self.set_size_request(-1, height)
+        self.segments = []
+        self.connect('draw', self._draw)
+
+    def set(self, segments):
+        if segments != self.segments:
+            self.segments = segments
+            self.queue_draw()
+
+    def _draw(self, _w, cr):
+        w, h = self.get_allocated_width(), self.get_allocated_height()
+        r = h / 2
+        cr.new_sub_path()
+        cr.arc(r, r, r, 1.5708, 4.7124)
+        cr.arc(w - r, r, r, 4.7124, 1.5708)
+        cr.close_path()
+        cr.save()
+        cr.clip_preserve()
+        cr.set_source_rgba(1, 1, 1, 0.07)
+        cr.fill()
+        x = 0.0
+        for frac, rgba in self.segments:
+            seg = max(0.0, min(1.0, frac)) * w
+            cr.rectangle(x, 0, seg, h)
+            cr.set_source_rgba(*rgba)
+            cr.fill()
+            x += seg
+        cr.restore()
+        return False
+
+
+LAB_RGBA = (*ACCENT, 0.95)
+OTHER_RGBA = (0.62, 0.62, 0.62, 0.55)
+OVERHEAD_RGBA = (0.99, 0.88, 0.0, 0.85)
+
+
+class ResourceView(Gtk.ScrolledWindow):
+    """What the lab costs the host: host CPU / memory / storage with the lab's share, the impact in
+    plain words, and a per-VM table. Numbers are host-side (what each VM's QEMU process really uses),
+    sampled from libvirt and /proc on the main window's 2 s tick."""
+    COLS = ('VM', 'CPU', 'Memory on host', 'Disk I/O', 'Network', 'Disk on host')
+    RESERVE = 4 << 30  # RAM to leave for Linux and your apps before calling it "room for another VM"
+
+    def __init__(self, app, names):
+        super().__init__(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        self.app, self.names = app, names
+        self.active = False
+        self.prev = None  # (monotonic s, host sample, {vm: stats})
+        self.last = None  # the latest render() arguments, shown straight away when the view opens
+        self.ncpu = os.cpu_count() or 1
+        self.model = ' '.join(cpu_model())
+        self.paths = {}
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, margin_start=20, margin_end=20, margin_bottom=20, margin_top=4)
+        self.add(body)
+
+        title = Gtk.Label(label='Host', xalign=0)
+        title.get_style_context().add_class('section')
+        body.pack_start(title, False, False, 0)
+        cards = Gtk.Box(spacing=8, homogeneous=True)
+        body.pack_start(cards, False, False, 0)
+        self.cpu_card = self._card(cards, 'Processor', spark=True)
+        self.mem_card = self._card(cards, 'Memory')
+        self.disk_card = self._card(cards, 'Storage')
+
+        title = Gtk.Label(label='Impact of the lab', xalign=0)
+        title.get_style_context().add_class('section')
+        body.pack_start(title, False, False, 0)
+        impact = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        impact.get_style_context().add_class('card')
+        body.pack_start(impact, False, False, 0)
+        self.impact = []
+        for _ in range(5):
+            lbl = Gtk.Label(xalign=0, wrap=True, use_markup=True)
+            lbl.get_style_context().add_class('impact')
+            impact.pack_start(lbl, False, False, 0)
+            self.impact.append(lbl)
+
+        title = Gtk.Label(label='Virtual machines', xalign=0)
+        title.get_style_context().add_class('section')
+        body.pack_start(title, False, False, 0)
+        table = Gtk.Grid(column_spacing=18, row_spacing=0)
+        table.get_style_context().add_class('card')
+        body.pack_start(table, False, False, 0)
+        for c, text in enumerate(self.COLS):
+            h = Gtk.Label(label=text, xalign=0)
+            h.get_style_context().add_class('res-head')
+            table.attach(h, c, 0, 1, 1)
+        self.cells = {}
+        for r, name in enumerate(names + ['Total'], start=1):
+            cells = []
+            for c in range(len(self.COLS)):
+                box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1, hexpand=c > 0)
+                box.get_style_context().add_class('res-cell')
+                main = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END)
+                main.get_style_context().add_class('res-total' if name == 'Total' else 'res-main')
+                sub = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END)
+                sub.get_style_context().add_class('res-sub')
+                box.pack_start(main, False, False, 0)
+                box.pack_start(sub, False, False, 0)
+                table.attach(box, c, r, 1, 1)
+                cells.append((main, sub))
+            cells[0][0].set_text(name.replace('HYD-', ''))
+            self.cells[name] = cells
+        note = Gtk.Label(xalign=0, wrap=True, label=(
+            'Memory is what each VM really holds in host RAM (its QEMU process), including QEMU’s own '
+            'overhead. What Windows uses inside the VM isn’t visible without a balloon device. CPU % is '
+            'of the VM’s own vCPUs; “host” is its share of all host threads.'))
+        note.get_style_context().add_class('res-sub')
+        note.set_margin_top(8)
+        body.pack_start(note, False, False, 0)
+
+    @staticmethod
+    def _card(parent, title, spark=False):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.get_style_context().add_class('card')
+        t = Gtk.Label(label=title, xalign=0)
+        t.get_style_context().add_class('res-sub')
+        big = Gtk.Label(xalign=0)
+        big.get_style_context().add_class('res-big')
+        meter = Meter()
+        legend = Gtk.Label(xalign=0, wrap=True, use_markup=True)
+        legend.get_style_context().add_class('res-sub')
+        for w in (t, big, meter, legend):
+            box.pack_start(w, False, False, 0)
+        card = {'big': big, 'meter': meter, 'legend': legend}
+        if spark:
+            card['spark'] = Sparkline()
+            card['spark'].set_size_request(-1, 30)
+            box.pack_start(card['spark'], False, False, 0)
+        parent.pack_start(box, True, True, 0)
+        return card
+
+    def _disk_used(self, name, dom):
+        """Space the VM's disk image really takes on the host (sparse qcow2: allocated blocks)."""
+        try:
+            if name not in self.paths:
+                self.paths[name] = disk_path(dom)
+            return os.stat(self.paths[name]).st_blocks * 512
+        except (OSError, RuntimeError, libvirt.libvirtError):
+            return 0
+
+    def sample(self):
+        """Take a sample (every tick, so rates are ready when the view opens); redraw if showing."""
+        flags = (libvirt.VIR_DOMAIN_STATS_STATE | libvirt.VIR_DOMAIN_STATS_CPU_TOTAL | libvirt.VIR_DOMAIN_STATS_BALLOON
+                 | libvirt.VIR_DOMAIN_STATS_INTERFACE | libvirt.VIR_DOMAIN_STATS_BLOCK | libvirt.VIR_DOMAIN_STATS_VCPU)
+        try:
+            stats = {d.name(): (d, s) for d, s in self.app.conn.getAllDomainStats(flags, 0)}
+            host = read_host()
+        except (libvirt.libvirtError, OSError):
+            return
+        now = time.monotonic()
+        prev, self.prev = self.prev, (now, host, stats)
+        if prev:
+            self.last = (now - prev[0], prev[1], prev[2], host, stats)
+            if self.active:
+                self.render(*self.last)
+
+    def render(self, dt, h0, s0, h1, s1):
+        GB = 1 << 30
+        rows, tot = {}, dict(cpu=0.0, vcpu_t=0.0, vcpus=0, rss=0, assigned=0, rd=0.0, wr=0.0, rx=0.0, tx=0.0, disk=0, running=0)
+        for name in self.names:
+            if name not in s1:
+                continue
+            dom, s = s1[name]
+            old = s0.get(name, (None, {}))[1]
+            running = s.get('state.state') == libvirt.VIR_DOMAIN_RUNNING
+            row = {'running': running, 'disk': self._disk_used(name, dom), 'key': getattr(self.app.rows.get(name), 'key', None)}
+            row['vcpus'] = s.get('vcpu.current') or dom.info()[3]
+            row['assigned'] = s.get('balloon.current', dom.info()[2]) * 1024
+            if running and old.get('state.state') == libvirt.VIR_DOMAIN_RUNNING:
+                d = lambda k: max(0, s.get(k, 0) - old.get(k, 0)) / dt
+                vt = sum(d(f'vcpu.{i}.time') for i in range(row['vcpus']))
+                row.update(cpu=d('cpu.time') / 1e9, vcpu_t=vt / 1e9, rss=s.get('balloon.rss', 0) * 1024,
+                           rd=sum(d(f'block.{i}.rd.bytes') for i in range(s.get('block.count', 0))),
+                           wr=sum(d(f'block.{i}.wr.bytes') for i in range(s.get('block.count', 0))),
+                           rx=sum(d(f'net.{i}.rx.bytes') for i in range(s.get('net.count', 0))),
+                           tx=sum(d(f'net.{i}.tx.bytes') for i in range(s.get('net.count', 0))))
+                for k in ('cpu', 'vcpu_t', 'rss', 'rd', 'wr', 'rx', 'tx'):
+                    tot[k] += row[k]
+                tot['vcpus'] += row['vcpus']
+                tot['assigned'] += row['assigned']
+                tot['running'] += 1
+            tot['disk'] += row['disk']
+            rows[name] = row
+            self._fill_row(name, row)
+
+        # Totals row
+        cells = self.cells['Total']
+        cells[0][1].set_text(f'{tot["running"]} running')
+        cells[1][0].set_text(f'{tot["cpu"] / self.ncpu * 100:.1f}% of host')
+        cells[1][1].set_text(f'{tot["vcpus"]} vCPU · {tot["cpu"]:.2f} threads busy')
+        cells[2][0].set_text(fmt_bytes(tot['rss']))
+        cells[2][1].set_text(f'{fmt_bytes(tot["assigned"], 0)} assigned · +{fmt_bytes(max(0, tot["rss"] - tot["assigned"]), 0)} QEMU')
+        cells[3][0].set_text(f'R {fmt_rate(tot["rd"])}')
+        cells[3][1].set_text(f'W {fmt_rate(tot["wr"])}')
+        cells[4][0].set_text(f'↓ {fmt_rate(tot["rx"])}')
+        cells[4][1].set_text(f'↑ {fmt_rate(tot["tx"])}')
+        cells[5][0].set_text(fmt_bytes(tot['disk']))
+        cells[5][1].set_text('all lab disks')
+
+        # Host cards
+        span = max(1, h1['total'] - h0['total'])
+        host_pct = (h1['busy'] - h0['busy']) / span * 100
+        lab_pct = min(host_pct, tot['cpu'] / self.ncpu * 100)
+        c = self.cpu_card
+        c['big'].set_text(f'{host_pct:.0f}%')
+        c['meter'].set([(lab_pct / 100, LAB_RGBA), ((host_pct - lab_pct) / 100, OTHER_RGBA)])
+        c['legend'].set_markup(f'<span foreground="#60cdff">■</span> Lab {lab_pct:.1f}%   '
+                               f'<span foreground="#9e9e9e">■</span> Other {host_pct - lab_pct:.1f}%\n'
+                               f'{self.ncpu} threads · {GLib.markup_escape_text(self.model)}')
+        c['spark'].push(host_pct)
+
+        mem = h1['mem']
+        total, avail = mem['MemTotal'], mem['MemAvailable']
+        other = max(0, total - avail - tot['rss'])
+        c = self.mem_card
+        c['big'].set_text(f'{(total - avail) / GB:.1f} of {total / GB:.1f} GB')
+        c['meter'].set([(tot['rss'] / total, LAB_RGBA), (other / total, OTHER_RGBA)])
+        c['legend'].set_markup(f'<span foreground="#60cdff">■</span> Lab {fmt_bytes(tot["rss"])}   '
+                               f'<span foreground="#9e9e9e">■</span> Other {fmt_bytes(other)}\n'
+                               f'{fmt_bytes(avail)} available · swap {fmt_bytes(mem.get("SwapTotal", 0), 0) if mem.get("SwapTotal") else "none"}')
+
+        fs = os.statvfs(os.path.dirname(next(iter(self.paths.values()), '/')) or '/')
+        fs_total, fs_free = fs.f_blocks * fs.f_frsize, fs.f_bavail * fs.f_frsize
+        fs_other = max(0, fs_total - fs_free - tot['disk'])
+        c = self.disk_card
+        c['big'].set_text(f'{fmt_bytes(fs_free)} free')
+        c['meter'].set([(tot['disk'] / fs_total, LAB_RGBA), (fs_other / fs_total, OTHER_RGBA)])
+        c['legend'].set_markup(f'<span foreground="#60cdff">■</span> Lab disks {fmt_bytes(tot["disk"])}   '
+                               f'<span foreground="#9e9e9e">■</span> Other {fmt_bytes(fs_other)}\n'
+                               f'of {fmt_bytes(fs_total)} on the disk holding the VM images')
+
+        self._impact(tot, host_pct, lab_pct, total, avail, mem, fs_free)
+
+    def _fill_row(self, name, row):
+        cells = self.cells[name]
+        text, _cls = STATE_TEXT.get(row['key'], ('Off', 'off'))
+        cells[0][1].set_text(text)
+        if not row['running'] or 'cpu' not in row:
+            cells[1][0].set_text('—')
+            cells[1][1].set_text(f'{row["vcpus"]} vCPU')
+            cells[2][0].set_text('—')
+            cells[2][1].set_text(f'{fmt_bytes(row["assigned"], 0)} assigned')
+            for c in (3, 4):
+                cells[c][0].set_text('—')
+                cells[c][1].set_text('')
+        else:
+            vm_pct = min(100.0, row['cpu'] / row['vcpus'] * 100)
+            cells[1][0].set_text(f'{vm_pct:.0f}%')
+            cells[1][1].set_text(f'{row["vcpus"]} vCPU · {row["cpu"] / self.ncpu * 100:.1f}% host')
+            cells[2][0].set_text(fmt_bytes(row['rss']))
+            cells[2][1].set_text(f'{fmt_bytes(row["assigned"], 0)} assigned · +{fmt_bytes(max(0, row["rss"] - row["assigned"]), 0)} QEMU')
+            cells[3][0].set_text(f'R {fmt_rate(row["rd"])}')
+            cells[3][1].set_text(f'W {fmt_rate(row["wr"])}')
+            cells[4][0].set_text(f'↓ {fmt_rate(row["rx"])}')
+            cells[4][1].set_text(f'↑ {fmt_rate(row["tx"])}')
+        cells[5][0].set_text(fmt_bytes(row['disk']) if row['disk'] else '—')
+        cells[5][1].set_text('frozen: + saved RAM' if row['key'] == 'saved' else '')
+
+    def _impact(self, tot, host_pct, lab_pct, total, avail, mem, fs_free):
+        GB = 1 << 30
+        b = lambda s: f'<b>{s}</b>'
+        lines = []
+        if tot['running']:
+            emu = max(0.0, tot['cpu'] - tot['vcpu_t'])
+            lines.append(f'CPU: the lab uses {b(f"{lab_pct:.1f}%")} of the host ({tot["cpu"]:.2f} of {self.ncpu} threads), '
+                         f'of which {emu:.2f} threads is virtualization overhead (QEMU device emulation and I/O).')
+            lines.append(f'Memory: the {tot["running"]} running VMs hold {b(fmt_bytes(tot["rss"]))} '
+                         f'({tot["rss"] / total * 100:.0f}% of host RAM), {fmt_bytes(max(0, tot["rss"] - tot["assigned"]), 0)} '
+                         f'of it QEMU overhead on top of what the VMs were given. {b(fmt_bytes(avail))} is left for Linux and your apps.')
+            ratio = tot['vcpus'] / self.ncpu
+            lines.append(f'Overcommit: {tot["vcpus"]} vCPUs on {self.ncpu} host threads ({ratio:.2f}:1) and '
+                         f'{fmt_bytes(tot["assigned"], 0)} of RAM assigned out of {fmt_bytes(total, 0)}: '
+                         + ('no overcommit, each vCPU can get a whole thread.' if ratio <= 1 else 'vCPUs share threads under load.'))
+        else:
+            lines.append('No VMs are running, so the lab isn’t using any CPU or memory right now.')
+        room = int(max(0, avail - self.RESERVE) // (4.3 * GB))  # a 4 GB client + QEMU overhead
+        lines.append(f'Headroom: room to start {b(str(room))} more 4 GB client{"s" if room != 1 else ""} while keeping '
+                     f'{fmt_bytes(self.RESERVE, 0)} free for the host.')
+        if not mem.get('SwapTotal'):
+            lines.append('<span foreground="#fce100">No swap on this host:</span> if RAM runs out, Linux stops the '
+                         'biggest process (most likely a VM, such as CM1) instead of slowing down. Freeze lab frees RAM safely.')
+        elif fs_free < 50 * GB:
+            lines.append('<span foreground="#fce100">Low disk space:</span> VM disks and frozen memory images grow into it.')
+        for lbl, text in zip(self.impact, lines + [''] * len(self.impact)):
+            if lbl.get_label() != text:
+                lbl.set_markup(text)
+            lbl.set_visible(bool(text))
+
+
 class LabManager:
     def __init__(self, gapp=None):
         self.gapp = gapp  # Gtk.Application when run normally; None in tests driven by Gtk.main()
@@ -1197,6 +1534,8 @@ class LabManager:
         self.grid = ConsoleGrid(self, names)
         self.view_stack.add_titled(sw, 'list', 'List')
         self.view_stack.add_titled(self.grid, 'consoles', 'Consoles')
+        self.resources = ResourceView(self, names)
+        self.view_stack.add_titled(self.resources, 'resources', 'Resources')
         self.view_stack.connect('notify::visible-child-name', self.on_view_changed)
         overlay.add(self.view_stack)
         win.add(overlay)
@@ -1207,14 +1546,19 @@ class LabManager:
         GLib.timeout_add(2000, self.tick)
         self.tick()
         win.show_all()
-        if load_settings().get('view') == 'consoles':
+        view = load_settings().get('view')
+        if view == 'consoles':
             win.set_default_size(1180, 820)
             win.resize(1180, 820)
-            self.view_stack.set_visible_child_name('consoles')
+        if view in ('consoles', 'resources'):
+            self.view_stack.set_visible_child_name(view)
 
     def on_view_changed(self, *_):
         view = self.view_stack.get_visible_child_name()
         self.grid.active = view == 'consoles'
+        self.resources.active = view == 'resources'
+        if self.resources.active and self.resources.last:
+            self.resources.render(*self.resources.last)
         if self.grid.active:
             self.grid.woken.clear()
             self.grid.refresh_states()
@@ -1232,6 +1576,7 @@ class LabManager:
             row.refresh()
         if self.grid.active:
             self.grid.refresh_states()
+        self.resources.sample()
         running = sum(1 for r in self.rows.values() if r.running)
         saved = sum(1 for r in self.rows.values() if r.key == 'saved')
         run = self.lab_run
