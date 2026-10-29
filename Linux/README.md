@@ -144,8 +144,18 @@ Linux/manager/install.sh          # adds "Lab Manager" to the apps menu
 ```
 
 A cleaner front end than virt-manager for this lab:
-- **Main window:** servers and clients as cards with role, addresses, status and a live CPU
-  graph, plus whether the VM's guest tools (QEMU guest agent) are connected. Each card has a
+- **Main window (List):** servers and clients as cards. Each shows status, role and Windows
+  version (`Server 2025 · 26100`, or **No guest tools**), live **CPU** (graph), **memory** (host RAM
+  vs. assigned) and **I/O**, or for a VM that's off when it was last used, how long it's been frozen
+  and the size of its memory image, or that its disk is empty (PXE targets). A facts strip below
+  lists its **addresses** per network (real IPs from the guest agent, the lab plan otherwise),
+  who's **signed in**, **uptime**, **C:** usage inside Windows and its **checkpoints**. Chips warn
+  about a drifting clock (click to set it from the host; Kerberos fails beyond 5 minutes), a full
+  C: drive, a guest agent that stopped answering or a crash. The ⌄ button (or a double-click)
+  opens details: Windows edition, build, host name, sign-in times, clock, firmware, TPM, display;
+  each NIC's network, MAC, device and traffic; volumes, disk image, activity and the newest
+  checkpoints. Windows details come from the QEMU guest agent about once a minute, checkpoints
+  every 5 minutes, so VMs without guest tools show the lab-plan values. Each card has a
   power button, Connect, and a menu with the power options, Checkpoints… and Open in virt-manager. **Start lab** boots DC1 → GW1 → CM1 → CLIENT1–4, waiting
   for DC1 and GW1 to answer before starting the rest. While it runs, the header shows its progress
   and the button becomes **Cancel**; any VM you start or shut down yourself meanwhile is skipped.
@@ -169,7 +179,7 @@ A cleaner front end than virt-manager for this lab:
   it's saved. After a resume, Lab Manager sets each VM's clock to the host's UTC time through the
   guest agent (a frozen VM wakes up with its clock behind, which a domain doesn't like). Saved
   memory lives in `/var/lib/libvirt/qemu/save` (up to the VMs' RAM, ~34 GB for the whole lab).
-- **Consoles view** (the **List | Consoles** switch in the header): live previews of every VM,
+- **Consoles view** (the **List | Consoles | Resources** switch in the header): live previews of every VM,
   refreshed every 3 seconds while the view is showing. Click a preview (or **Connect**) to open its
   console; off VMs have **Start**. If a VM's screen is blank because Windows turned the display off,
   the view wakes it automatically (presses Shift) the first time it sees it; a **Wake** button
@@ -177,14 +187,27 @@ A cleaner front end than virt-manager for this lab:
   the screens stay on after that. Previews come from libvirt
   screenshots, not SPICE, so they don't take a VM's one viewer slot: an open console keeps working.
   The app remembers which view you used last.
-- **Resources view:** what the lab costs the host. Cards for the host's **processor**, **memory**
-  and **storage** show the lab's share next to everything else (and what's free). An **Impact**
-  panel spells it out: the lab's CPU share and how much of it is virtualization overhead, the RAM the
-  running VMs hold (QEMU overhead included) and what's left, vCPU/RAM overcommit, how many more
-  4 GB clients fit, and a warning when the host has no swap. A per-VM table lists CPU (of its vCPUs
-  and of the host), host RAM, disk read/write, network and disk-image size, with a total row.
+- **Resources view:** a dashboard of what the lab costs the host.
+  - **Hero:** rings for the host's processor, memory and storage (the lab's share vs. everything
+    else), a plain-words verdict, **capacity** (how many more 4 GB clients fit with 4 GB kept for
+    the host), a map of all 32 host threads, and tiles for vCPU overcommit, QEMU overhead, CPU
+    package temperature and host uptime.
+  - **Insights:** memory pressure (no swap on this host, so running out of RAM kills a VM),
+    the lab's CPU share and overhead, frozen VMs and whether resuming them fits in RAM, clock drift,
+    a full C:, low disk space and heat, with buttons (Freeze lab, Resume lab, Sync clock).
+  - **Activity:** a 5 or 15 minute chart of CPU, memory, disk or network, stacked per VM in its
+    own colour, with a hover tooltip. Hover or click a VM (here, in the table or the RAM bar) to
+    highlight it.
+  - **Where host RAM goes:** every running VM, QEMU overhead, Linux & apps and free memory, the
+    4 GB reserve line, and dashed outlines for frozen VMs showing what resuming would need.
+  - **Virtual machines:** a table with CPU, host RAM, disk and network graphs and disk-image
+    size per VM, plus totals. Double-click a row to connect; right-click for power options.
+  - **Lab networks** (traffic on CorpNet and through the NAT) and host facts (CPU, RAM, load,
+    kernel, libvirt and QEMU versions).
+
   Memory is host-side (each VM's QEMU process); Windows' own usage inside a VM would need a
-  virtio balloon device, which these VMs don't have.
+  virtio balloon device, which these VMs don't have. Stats are gathered every 2 seconds off the
+  UI thread, also while the view is hidden, so the charts have history when you open it.
 - **Console:** a slim header (VM name, role, Ctrl+Alt+Del, resolution, power, full screen) over
   the VM. The resolution button offers **Auto** (Windows follows the window size) or a fixed
   1280×720 … 2560×1440: the window resizes to fit that size, like Hyper-V's console, or fills the
