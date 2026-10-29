@@ -161,6 +161,14 @@ A cleaner front end than virt-manager for this lab:
   Safe actions go through the guest agent when the VM has guest tools, else the virtual power
   button. Windows ignores the power button while it's still starting up, so if the VM is still
   running 90 seconds after Shut down you get a message suggesting to try again or use Power off.
+- **Freeze lab / Resume lab** (like Hyper-V's *Save*): **Freeze lab** saves every running VM's
+  memory to disk (clients first, servers last) and frees its RAM and CPU. While anything is frozen,
+  **Start lab** becomes **Resume lab**, which brings back **only the frozen VMs**, DC1 → GW1 → CM1
+  first, exactly where they left off, even after the laptop restarts. Frozen VMs show a **Saved**
+  pill. Per VM: **Save state** in the power menu, and **Resume** / **Discard saved state** when
+  it's saved. After a resume, Lab Manager sets each VM's clock to the host's UTC time through the
+  guest agent (a frozen VM wakes up with its clock behind, which a domain doesn't like). Saved
+  memory lives in `/var/lib/libvirt/qemu/save` (up to the VMs' RAM, ~34 GB for the whole lab).
 - **Consoles view** (the **List | Consoles** switch in the header): live previews of every VM,
   refreshed every 3 seconds while the view is showing. Click a preview (or **Connect**) to open its
   console; off VMs have **Start**. If a VM's screen is blank because Windows turned the display off,
