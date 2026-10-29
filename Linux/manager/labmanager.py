@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Lab Manager: a Windows 11-style window for the hydration lab VMs (libvirt qemu:///system).
 
-Main window, two views:
-- List: VM cards with role, status, guest tools state, live CPU graph, Connect, Checkpoints, and
+Main window, three views:
+- List: VM cards with status, role, Windows version, live CPU / memory / I/O (or when it was last
+  used / frozen), a facts strip (addresses, signed in, uptime, C:, checkpoints), warning chips
+  (clock drift, full C:, guest tools not answering), an expandable details panel, Connect, and
   VMware-style power options: safe Shut down / Restart (through Windows) and hard Power off / Reset
-  (like the physical buttons, confirmed first).
+  (like the physical buttons, confirmed first). Windows details come from the QEMU guest agent
+  (GuestProbe, about once a minute), so VMs without guest tools show the lab plan instead.
 - Consoles: live previews of every VM from libvirt screenshots, which don't take the VM's one SPICE
   viewer slot; click one to open its console.
-- Resources: host CPU / memory / storage with the lab's share, the lab's impact in plain words
-  (overhead, overcommit, headroom) and a per-VM table of CPU, host RAM, disk and network use.
+- Resources: a dashboard of what the lab costs the host: rings for CPU / memory / storage, a
+  verdict, capacity, host threads, KPIs, insights with actions, an activity timeline per VM, where
+  host RAM goes, a per-VM table, the lab networks and host facts.
 "Start lab" boots DC1 -> GW1 -> CM1 -> CLIENT1-4 in order,
 shows its progress, can be cancelled, and skips any VM you start or stop yourself meanwhile.
 Console: a slim header (VM name, Ctrl+Alt+Del, resolution, power, full screen) over the SPICE
@@ -1604,6 +1608,7 @@ class GuestProbe:
         self.due = {}  # (kind, name) -> monotonic time
         self.fails = {}
         self.in_flight = set()
+        self.poked = set()  # (kind, name) wanted as soon as possible
         self.logged = set()
         self._stop = threading.Event()
         threading.Thread(target=self._worker, daemon=True).start()
@@ -1617,7 +1622,7 @@ class GuestProbe:
         self.wanted = wanted
 
     def poke(self, name, kind='ckpt'):
-        self.due[(kind, name)] = 0
+        self.poked.add((kind, name))
 
     def stop(self):
         self._stop.set()
@@ -1629,10 +1634,12 @@ class GuestProbe:
         for i, (name, (running, agent, up)) in enumerate(list(self.wanted.items())):
             if name in self.in_flight:
                 continue
-            if self.due.setdefault(('ckpt', name), now + 2 * i) <= now:
+            if ('ckpt', name) in self.poked or self.due.setdefault(('ckpt', name), now + 2 * i) <= now:
+                self.poked.discard(('ckpt', name))
                 return 'ckpt', name
             if running and agent and (up is None or wall - up >= 90):
-                if self.due.setdefault(('guest', name), now) <= now:
+                if ('guest', name) in self.poked or self.due.setdefault(('guest', name), now) <= now:
+                    self.poked.discard(('guest', name))
                     return 'guest', name
         return None
 
@@ -1649,13 +1656,13 @@ class GuestProbe:
                 continue
             kind, name = job
             self.in_flight.add(name)
-            helper = threading.Thread(target=self._run, args=(conn, kind, name, self.due.get(job)), daemon=True)
+            helper = threading.Thread(target=self._run, args=(conn, kind, name), daemon=True)
             helper.start()
             helper.join(10)  # a slow agent keeps going on its own; _run does the bookkeeping when it ends
             if helper.is_alive():
                 self.due[job] = time.monotonic() + self.BACKOFF  # don't pick this VM again meanwhile
 
-    def _run(self, conn, kind, name, due_at_start):
+    def _run(self, conn, kind, name):
         box = {}
         try:
             dom = conn.lookupByName(name)
@@ -1689,8 +1696,7 @@ class GuestProbe:
                 every = self.BACKOFF if self.fails[job] >= 2 else every
             else:
                 self.fails[job] = 0
-            if not (self.due.get(job) == 0 and due_at_start != 0):  # keep a poke() that came in meanwhile
-                self.due[job] = time.monotonic() + every
+            self.due[job] = time.monotonic() + every  # pokes live in self.poked, so none is lost here
             self.in_flight.discard(name)
 
 
@@ -1726,16 +1732,18 @@ def set_text(label, text, markup=False):
         label.set_markup(text) if markup else label.set_text(text)
 
 
-class VmRow(Gtk.Box):
+class VmRow(Gtk.EventBox):
     """A VM card in the List: identity, live CPU / memory / I/O (or a summary when it's off),
     power buttons, a facts strip (addresses, signed in, uptime, C:, checkpoints), warning chips,
     and an expandable detail panel."""
     def __init__(self, app, dom):
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        super().__init__(visible_window=False)  # a window of its own, so clicks on the card reach it
+        self.card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.add(self.card)
         self.app, self.dom, self.name = app, dom, dom.name()
         kind, role, addr = LAB.get(self.name, ('client', '', ''))
         self.kind, self.role, self.plan_addr = kind, role, addr
-        styled(self, 'card', 'vm')
+        styled(self.card, 'card', 'vm')
         self.state = None
         self.key = None  # state, or 'saved' when it's off with a saved memory image
         self.agent = None
@@ -1752,7 +1760,7 @@ class VmRow(Gtk.Box):
 
         # Row A
         top = Gtk.Box(spacing=12)
-        self.pack_start(top, False, False, 0)
+        self.card.pack_start(top, False, False, 0)
         self.icon = Gtk.Image.new_from_pixbuf(tile_pixbuf(kind, False))
         self.icon.set_valign(Gtk.Align.CENTER)
         top.pack_start(self.icon, False, False, 0)
@@ -1804,7 +1812,7 @@ class VmRow(Gtk.Box):
 
         # Facts strip
         self.facts_box = styled(Gtk.Box(spacing=0), 'facts')
-        self.pack_start(self.facts_box, False, False, 0)
+        self.card.pack_start(self.facts_box, False, False, 0)
         self.f_addr = self._fact('Address', hexpand=True, markup=True)
         self.f_user = self._fact('Signed in', 140)
         self.f_up = self._fact('Uptime', 96)
@@ -1818,16 +1826,16 @@ class VmRow(Gtk.Box):
         self.pxe_note = styled(Gtk.Label(xalign=0, no_show_all=True), 'fact-val', 'muted')
         self.pxe_note.set_margin_start(52)
         self.pxe_note.set_margin_top(8)
-        self.pack_start(self.pxe_note, False, False, 0)
+        self.card.pack_start(self.pxe_note, False, False, 0)
 
         # Warning chips
         self.chips = styled(Gtk.Box(spacing=6, no_show_all=True), 'chips')
-        self.pack_start(self.chips, False, False, 0)
+        self.card.pack_start(self.chips, False, False, 0)
         self.chip_widgets = {}
 
         # Detail panel
         self.rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_DOWN, transition_duration=180)
-        self.pack_start(self.rev, False, False, 0)
+        self.card.pack_start(self.rev, False, False, 0)
         detail = styled(Gtk.Box(spacing=24, homogeneous=True), 'vm-detail')
         self.rev.add(detail)
         self.d_sys = self._detail_col(detail, 'System')
@@ -1956,7 +1964,7 @@ class VmRow(Gtk.Box):
         if live and self.up_since is None:
             self.up_since = qemu_started(self.name)
         self.metrics.set_visible_child_name('live' if live else 'off')
-        set_classes(self, set() if live else {'off'}, ('off',))
+        set_classes(self.card, set() if live else {'off'}, ('off',))
         assigned = self.facts.get('mem') or mem * 1024
         vcpus = self.facts.get('vcpus') or vcpus
         if live:
@@ -3336,6 +3344,9 @@ class ResourceView(Gtk.ScrolledWindow):
             row = self.app.rows.get(name)
             facts = row.facts if row else {}
             old = prev[2].get(name, (None, {}))[1]
+            if old.get('state.state') == s.get('state.state'):
+                for k, v in old.items():  # NOWAIT skips a busy VM's monitor stats: reuse the last values
+                    s.setdefault(k, v)
             r = {'running': s.get('state.state') == libvirt.VIR_DOMAIN_RUNNING,
                  'vcpus': s.get('vcpu.current') or facts.get('vcpus') or 1,
                  'assigned': (s.get('balloon.current') or 0) * 1024 or facts.get('mem', 0)}
