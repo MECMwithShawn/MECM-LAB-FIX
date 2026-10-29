@@ -81,6 +81,7 @@ STATE_TEXT = {
     libvirt.VIR_DOMAIN_SHUTOFF: ('Off', 'off'),
     libvirt.VIR_DOMAIN_CRASHED: ('Crashed', 'error'),
     libvirt.VIR_DOMAIN_PMSUSPENDED: ('Suspended', 'paused'),
+    'saved': ('Saved', 'saved'),  # shut off with a managed save image: Start resumes it
 }
 
 CSS = b"""
@@ -105,6 +106,7 @@ window.lab, window.lab-console { background-color: #202020; }
 .pill.off { background: rgba(255,255,255,0.07); color: #9e9e9e; }
 .pill.busy, .pill.paused { background: rgba(252,225,0,0.14); color: #fce100; }
 .pill.error { background: rgba(255,153,164,0.16); color: #ff99a4; }
+.pill.saved { background: rgba(176,150,255,0.18); color: #c3b1ff; }
 .cpu { font-size: 11px; color: #9a9a9a; font-feature-settings: "tnum"; }
 button.icon {
     background: none; border: none; box-shadow: none; border-radius: 6px;
@@ -387,6 +389,7 @@ class VmRow(Gtk.Box):
         for wdg in (self.power, self.connect_btn, self.more):
             self.pack_start(wdg, False, False, 0)
         self.state = None
+        self.key = None  # state, or 'saved' when it's off with a saved memory image
         self.agent = None
         self._xml_tick = 0
         self.refresh()
@@ -414,13 +417,17 @@ class VmRow(Gtk.Box):
             state, _max, mem, vcpus, cpu_time = self.dom.info()
         except libvirt.libvirtError:
             return
-        text, cls = STATE_TEXT.get(state, ('Unknown', 'off'))
-        if state != self.state:
+        saved = state == libvirt.VIR_DOMAIN_SHUTOFF and self.dom.hasManagedSaveImage(0)
+        key = 'saved' if saved else state
+        text, cls = STATE_TEXT.get(key, ('Unknown', 'off'))
+        if key != self.key:
+            self.key = key
             ctx = self.pill.get_style_context()
-            for c in ('running', 'off', 'busy', 'paused', 'error'):
+            for c in ('running', 'off', 'busy', 'paused', 'error', 'saved'):
                 ctx.remove_class(c)
             ctx.add_class(cls)
             self.pill.set_text(text)
+        if state != self.state:
             running = state == libvirt.VIR_DOMAIN_RUNNING
             set_icon(self.power, 'system-shutdown-symbolic' if running else 'media-playback-start-symbolic')
             self.power.set_tooltip_text('Power options' if running else 'Start')
@@ -452,7 +459,7 @@ class VmRow(Gtk.Box):
 
     def toggle_power(self):
         if self.state == libvirt.VIR_DOMAIN_SHUTOFF:
-            self.app.act(self.name, 'Starting', self.dom.create)
+            self.app.start_vm(self.name)
         else:
             popover_menu(self.power, self.app.power_items(self.name, self.app.window)).popup()
 
@@ -646,9 +653,12 @@ class Console(Gtk.Window):
             self.ph_reconnect.hide()
             if self.session:
                 self.close_session()
-            text, _ = STATE_TEXT.get(state, ('Off', 'off'))
+            saved = state == libvirt.VIR_DOMAIN_SHUTOFF and self.dom.hasManagedSaveImage(0)
+            text, _ = STATE_TEXT.get('saved' if saved else state, ('Off', 'off'))
             self.ph_title.set_text(f'{self.name.replace("HYD-", "")} is {text.lower()}')
-            self.ph_text.set_text('Start it to connect.' if state == libvirt.VIR_DOMAIN_SHUTOFF else '')
+            self.ph_text.set_text('Resume it to continue where it left off.' if saved else
+                                  'Start it to connect.' if state == libvirt.VIR_DOMAIN_SHUTOFF else '')
+            self.ph_start.set_label('Resume' if saved else 'Start')
             self.ph_start.set_visible(state == libvirt.VIR_DOMAIN_SHUTOFF)
             self.stack.set_visible_child_name('placeholder')
         if self.is_fullscreen:
@@ -843,7 +853,7 @@ class Console(Gtk.Window):
                                    SpiceClientGtk.DisplayKeyEvent.CLICK)
 
     def start_vm(self):
-        self.app.act(self.name, 'Starting', self.dom.create, toaster=self.toast)
+        self.app.start_vm(self.name, toaster=self.toast)
 
     def power_menu(self, widget):
         try:
@@ -929,7 +939,7 @@ class ConsoleGrid(Gtk.ScrolledWindow):
         off_label = Gtk.Label()
         off_label.get_style_context().add_class('tile-off')
         off.pack_start(off_label, False, False, 0)
-        start = text_button('Start', 'accent', lambda: self.app.act(name, 'Starting', self.app.conn.lookupByName(name).create))
+        start = text_button('Start', 'accent', lambda: self.app.start_vm(name))
         start.set_halign(Gtk.Align.CENTER)
         off.pack_start(start, False, False, 0)
         screen.add_named(off, 'off')
@@ -953,13 +963,15 @@ class ConsoleGrid(Gtk.ScrolledWindow):
         """Pills and off placeholders, from the list view's cached states (no extra libvirt calls)."""
         for name, t in self.tiles.items():
             row = self.app.rows.get(name)
-            state = row.state if row else None
-            if state == t['state']:
+            key = row.key if row else None
+            if key == t.get('key'):
                 continue
+            t['key'] = key
+            state = row.state if row else None
             t['state'] = state
-            text, cls = STATE_TEXT.get(state, ('Unknown', 'off'))
+            text, cls = STATE_TEXT.get(key, ('Unknown', 'off'))
             ctx = t['pill'].get_style_context()
-            for c in ('running', 'off', 'busy', 'paused', 'error'):
+            for c in ('running', 'off', 'busy', 'paused', 'error', 'saved'):
                 ctx.remove_class(c)
             ctx.add_class(cls)
             t['pill'].set_text(text)
@@ -967,7 +979,8 @@ class ConsoleGrid(Gtk.ScrolledWindow):
                 if t['image'].get_pixbuf() is not None:
                     t['screen'].set_visible_child_name('live')
             else:
-                t['off_label'].set_text(f'{text}')
+                t['off_label'].set_text('Saved · resumes where it left off' if key == 'saved' else text)
+                t['start'].set_label('Resume' if key == 'saved' else 'Start')
                 t['start'].set_visible(state == libvirt.VIR_DOMAIN_SHUTOFF)
                 t['screen'].set_visible_child_name('off')
                 t['image'].clear()
@@ -1048,13 +1061,18 @@ class LabManager:
     def build_main(self):
         win = Gtk.Window(title='Lab Manager')
         win.get_style_context().add_class('lab')
-        win.set_default_size(820, 760)
+        win.set_default_size(940, 780)
         win.set_icon_name('computer')
         hb = Gtk.HeaderBar(show_close_button=True, title='Lab Manager')
         self.header = hb
         self.start_lab_btn = text_button('Start lab', 'accent', self.start_lab)
         self.start_lab_btn.set_tooltip_text('Start DC1, GW1, CM1, then CLIENT1–4, each after the previous is up')
         hb.pack_start(self.start_lab_btn)
+        self.freeze_btn = text_button('Freeze lab', 'subtle', self.freeze_lab)
+        self.freeze_btn.set_image(Gtk.Image.new_from_icon_name('weather-snow-symbolic', Gtk.IconSize.BUTTON))
+        self.freeze_btn.set_always_show_image(True)
+        self.freeze_btn.set_tooltip_text('Save every running VM to disk and free its RAM; Resume lab brings back exactly these')
+        hb.pack_start(self.freeze_btn)
         self.view_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
         switcher = Gtk.StackSwitcher(stack=self.view_stack)
         switcher.set_valign(Gtk.Align.CENTER)
@@ -1120,10 +1138,22 @@ class LabManager:
         if self.grid.active:
             self.grid.refresh_states()
         running = sum(1 for r in self.rows.values() if r.running)
+        saved = sum(1 for r in self.rows.values() if r.key == 'saved')
         run = self.lab_run
-        subtitle = run['status'] if run else f'corp.contoso.com · {running} of {len(self.rows)} running'
+        subtitle = run['status'] if run else (f'corp.contoso.com · {running} of {len(self.rows)} running'
+                                              + (f' · {saved} frozen' if saved else ''))
         if self.header.get_subtitle() != subtitle:
             self.header.set_subtitle(subtitle)
+        if not run:
+            label = 'Resume lab' if saved else 'Start lab'
+            if self.start_lab_btn.get_label() != label:
+                self.start_lab_btn.set_label(label)
+                self.start_lab_btn.set_tooltip_text(
+                    'Resume the frozen VMs (DC1, GW1, CM1 first), right where they left off' if saved else
+                    'Start DC1, GW1, CM1, then CLIENT1–4, each after the previous is up')
+        freeze_ok = running > 0 and run is None
+        if self.freeze_btn.get_sensitive() != freeze_ok:
+            self.freeze_btn.set_sensitive(freeze_ok)
         return True
 
     # -- shared -----------------------------------------------------------
@@ -1148,8 +1178,12 @@ class LabManager:
                 state = libvirt.VIR_DOMAIN_NOSTATE
         off = state == libvirt.VIR_DOMAIN_SHUTOFF
         running = state == libvirt.VIR_DOMAIN_RUNNING
+        if off and dom.hasManagedSaveImage(0):
+            return [('Resume', lambda: self.start_vm(name, toaster), True, 'Continues exactly where it was saved'),
+                    ('Discard saved state', lambda: self.discard_save(name, parent, toaster), True,
+                     'Next start boots fresh instead'),]
         if off:
-            return [('Start', lambda: self.act(name, 'Starting', dom.create, toaster=toaster), True, 'Power on the VM')]
+            return [('Start', lambda: self.start_vm(name, toaster), True, 'Power on the VM')]
         return [
             ('header', 'Safe — Windows shuts down cleanly'),
             ('Shut down', lambda: self.shutdown(name, toaster), running, 'Saves work, closes apps, then powers off'),
@@ -1158,7 +1192,55 @@ class LabManager:
             ('header', 'Hard — like the physical buttons'),
             ('Power off', lambda: self.hard(name, parent, toaster, 'off'), True, 'Cuts power instantly; unsaved work is lost'),
             ('Reset', lambda: self.hard(name, parent, toaster, 'reset'), running, 'Instant reboot without shutting down'),
+            None,
+            ('header', 'Suspend'),
+            ('Save state', lambda: self.save_vm(name, toaster), running,
+             'Saves memory to disk and frees its RAM; Resume continues right here'),
         ]
+
+    def start_vm(self, name, toaster=None):
+        """Start a VM; if it has a saved state this resumes it, then re-syncs its clock."""
+        dom = self.conn.lookupByName(name)
+        saved = dom.hasManagedSaveImage(0)
+
+        def work():
+            dom.create()
+            if saved:
+                self.sync_clock(dom)
+        if self.lab_run:
+            self.lab_run['touched'].add(name)
+        (toaster or self.toast).show(f'{"Resuming" if saved else "Starting"} {name.replace("HYD-", "")}…', 3)
+        run_bg(work, lambda _r, err: err and (toaster or self.toast).show(f'{name.replace("HYD-", "")}: {err}', 6))
+
+    @staticmethod
+    def sync_clock(dom):
+        """A resumed VM's clock is behind by however long it was saved, which upsets a domain
+        (Kerberos). Set it to the host's UTC time through the guest agent when the VM has one.
+        (Not VIR_DOMAIN_TIME_SYNC: that copies the VM's RTC, which runs on host local time and put
+        a client 2 hours off.)"""
+        for _ in range(10):
+            try:
+                now = time.time()
+                dom.setTime({'seconds': int(now), 'nseconds': int((now % 1) * 1e9)}, 0)
+                return True
+            except libvirt.libvirtError:
+                time.sleep(2)  # agent not answering yet
+        return False
+
+    def save_vm(self, name, toaster=None):
+        dom = self.conn.lookupByName(name)
+        self.act(name, 'Saving state of', lambda: dom.managedSave(0), toaster=toaster)
+
+    def discard_save(self, name, parent, toaster):
+        dlg = Gtk.MessageDialog(transient_for=parent, modal=True, message_type=Gtk.MessageType.WARNING,
+                                buttons=Gtk.ButtonsType.OK_CANCEL, text=f'Discard {name.replace("HYD-", "")}\'s saved state?')
+        dlg.format_secondary_text('Its next start boots Windows fresh, like after a power cut: anything '
+                                  'unsaved in the frozen session is lost.')
+        ok = dlg.run() == Gtk.ResponseType.OK
+        dlg.destroy()
+        if ok:
+            dom = self.conn.lookupByName(name)
+            self.act(name, 'Discarding saved state of', lambda: dom.managedSaveRemove(0), toaster=toaster)
 
     SAFE_FLAGS = libvirt.VIR_DOMAIN_SHUTDOWN_GUEST_AGENT | libvirt.VIR_DOMAIN_SHUTDOWN_ACPI_POWER_BTN
 
@@ -1210,9 +1292,13 @@ class LabManager:
             self.start_lab_btn.set_sensitive(False)
             self.tick()
             return
+        doms = {d.name(): d for d in self.conn.listAllDomains()}
+        frozen = [n for n in START_ORDER + sorted(set(doms) - set(START_ORDER))
+                  if n in doms and doms[n].hasManagedSaveImage(0)]
+        if frozen:
+            return self.resume_lab(doms, frozen)
         run = self.lab_run = {'cancel': threading.Event(), 'touched': set(), 'status': 'Starting lab…'}
         self.start_lab_btn.set_label('Cancel')
-        doms = {d.name(): d for d in self.conn.listAllDomains()}
         order = [n for n in START_ORDER if n in doms]
 
         def wait(seconds):
@@ -1246,6 +1332,83 @@ class LabManager:
             self.start_lab_btn.set_sensitive(True)
             self.toast.show(f'Start lab: {err}' if err else
                             'Start lab cancelled' if res == 'cancelled' else 'Lab started', 5)
+            self.tick()
+        run_bg(work, done)
+
+    def resume_lab(self, doms, frozen):
+        """Bring back exactly the frozen VMs, servers first, and re-sync their clocks."""
+        run = self.lab_run = {'cancel': threading.Event(), 'touched': set(), 'status': 'Resuming lab…'}
+        self.start_lab_btn.set_label('Cancel')
+
+        def work():
+            resumed = []
+            for i, n in enumerate(frozen, 1):
+                if run['cancel'].is_set():
+                    return resumed, 'cancelled'
+                if n in run['touched']:
+                    continue
+                run['status'] = f'Resume lab: {n.replace("HYD-", "")} · {i} of {len(frozen)}'
+                doms[n].create()  # restores the saved memory image
+                resumed.append(n)
+                if run['cancel'].wait(2):
+                    return resumed, 'cancelled'
+            run['status'] = 'Resume lab: syncing clocks…'
+            synced = [n for n in resumed if self.sync_clock(doms[n])]
+            return resumed, synced
+
+        def done(res, err):
+            self.lab_run = None
+            self.start_lab_btn.set_sensitive(True)
+            if err:
+                self.toast.show(f'Resume lab: {err}', 6)
+            else:
+                resumed, synced = res
+                note = 'cancelled' if synced == 'cancelled' else (
+                    f'clocks synced on {len(synced)}' if synced else 'no guest agents to sync clocks')
+                self.toast.show(f'Resumed {len(resumed)} VM{"s" if len(resumed) != 1 else ""} · {note}', 6)
+            self.tick()
+        run_bg(work, done)
+
+    def freeze_lab(self):
+        running = [n for n in reversed(START_ORDER) if n in self.rows and self.rows[n].running]
+        running += [n for n, r in self.rows.items() if r.running and n not in running]
+        if not running:
+            return
+        ram = sum(self.rows[n].dom.info()[2] for n in running) / 1048576
+        dlg = Gtk.MessageDialog(transient_for=self.window, modal=True, message_type=Gtk.MessageType.QUESTION,
+                                buttons=Gtk.ButtonsType.NONE,
+                                text=f'Freeze {len(running)} running VM{"s" if len(running) != 1 else ""}?')
+        dlg.format_secondary_text(
+            f'{", ".join(n.replace("HYD-", "") for n in running)}.\n\nEach VM\'s memory is saved to disk (up to '
+            f'{ram:g} GB in total) and its RAM and CPU are freed. Resume lab brings back exactly these VMs, right '
+            'where they left off, even after the laptop restarts.')
+        dlg.add_button('Cancel', Gtk.ResponseType.CANCEL)
+        dlg.add_button('Freeze', Gtk.ResponseType.OK).get_style_context().add_class('suggested-action')
+        ok = dlg.run() == Gtk.ResponseType.OK
+        dlg.destroy()
+        if not ok:
+            return
+        run = self.lab_run = {'cancel': threading.Event(), 'touched': set(), 'status': 'Freezing lab…'}
+        self.start_lab_btn.set_label('Cancel')
+        doms = {n: self.rows[n].dom for n in running}
+
+        def work():
+            done_names = []
+            for i, n in enumerate(running, 1):  # clients first, servers last
+                if run['cancel'].is_set():
+                    break
+                if n in run['touched']:
+                    continue
+                run['status'] = f'Freeze lab: saving {n.replace("HYD-", "")} · {i} of {len(running)}'
+                doms[n].managedSave(0)
+                done_names.append(n)
+            return done_names
+
+        def done(res, err):
+            self.lab_run = None
+            self.start_lab_btn.set_sensitive(True)
+            self.toast.show(f'Freeze lab: {err}' if err else
+                            f'Froze {len(res)} VM{"s" if len(res) != 1 else ""}. Resume lab brings them back.', 6)
             self.tick()
         run_bg(work, done)
 
