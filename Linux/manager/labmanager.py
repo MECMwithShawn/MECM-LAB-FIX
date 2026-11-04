@@ -66,6 +66,7 @@ LAB = {
     'HYD-Client6': ('client', 'Bare metal · PXE / OSD', 'DHCP'),
 }
 RESOLUTIONS = [(1280, 720), (1366, 768), (1600, 900), (1920, 1080), (2560, 1440)]
+MAX_AUTO_WIDTH = 3840  # fractional scaling makes GTK report 2x the logical size, above the real 4K
 SETTINGS = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config')), 'lab-manager', 'settings.json')
 
 
@@ -2784,6 +2785,9 @@ class Console(Gtk.Window):
         self.qxl = False          # live graphics model can change mode (QXL); others ignore requests
         self.guest_size = None    # the guest's current screen size, from the display channel
         self.cursor_channel = self.cursor_fix = None
+        self.max_pixels = None    # largest mode the QXL framebuffer can hold (vgamem at 32 bpp)
+        self.capped = None        # Auto: the mode we asked for because the window is too big for it
+        self.resize_timer = None
         self.auto_connect = True  # off after we lose a connection, so two viewers don't keep kicking each other
         self.is_fullscreen = False
         self.resolution = load_settings().get('resolution', {}).get(self.name)  # None = Auto, else [w, h]
@@ -2899,6 +2903,8 @@ class Console(Gtk.Window):
         self.ph_start.hide()
         video = ET.fromstring(self.dom.XMLDesc(0)).find('./devices/video/model')
         self.qxl = video is not None and video.get('type') == 'qxl'
+        vgamem = int(video.get('vgamem', 0)) if self.qxl else 0  # KiB
+        self.max_pixels = vgamem * 1024 // 4 or None
         self.session = SpiceClientGLib.Session()
         self.session.set_property('uri', uri)
         self.session.set_property('enable-audio', False)
@@ -2927,6 +2933,7 @@ class Console(Gtk.Window):
         self.display.set_property('scaling', True)
         self.display.set_property('grab-keyboard', True)
         self.display.set_property('grab-mouse', False)
+        self.display.connect('size-allocate', self.on_display_resized)
         self.display.show()
         self.stack.add_named(self.display, 'display')
         self.stack.set_visible_child_name('display')
@@ -3027,15 +3034,39 @@ class Console(Gtk.Window):
         self.update_res_button()
         self.apply_resolution()
 
+    def capped_size(self):
+        """Auto: the window's shape at the largest mode the guest can show, or None if the window
+        fits. Windows refuses bigger modes outright and stays at its old one, letterboxed."""
+        alloc = self.display.get_allocation()
+        scale = self.display.get_scale_factor()  # the widget asks for device pixels
+        w, h = alloc.width * scale, alloc.height * scale
+        if not self.max_pixels or w * h <= self.max_pixels:
+            return None
+        shrink = min((self.max_pixels / (w * h)) ** 0.5, MAX_AUTO_WIDTH / w)
+        return int(w * shrink) & ~7, int(h * shrink) & ~7
+
+    def on_display_resized(self, *_):
+        if self.resize_timer:
+            GLib.source_remove(self.resize_timer)
+        self.resize_timer = GLib.timeout_add(300, self.check_cap)
+
+    def check_cap(self):
+        self.resize_timer = None
+        if self.display and self.resolution is None and self.capped_size() != self.capped:
+            self.apply_resolution()
+        return False
+
     def apply_resolution(self):
-        """Auto: let the display widget size the guest to the window. Fixed: ask the guest's
-        SPICE agent for that mode and size the window to fit it, like Hyper-V's console."""
+        """Auto: let the display widget size the guest to the window (or ask for the largest mode
+        that fits, scaled up). Fixed: ask the guest's SPICE agent for that mode and size the window
+        to fit it, like Hyper-V's console."""
         if not (self.display and self.qxl and self.agent_ready()):
             return
+        self.capped = self.capped_size() if self.resolution is None else None
         if self.resolution is None:
-            self.display.set_property('resize-guest', True)
+            self.display.set_property('resize-guest', self.capped is None)
             alloc = self.display.get_allocation()
-            w, h = alloc.width, alloc.height
+            w, h = self.capped or (alloc.width, alloc.height)
         else:
             self.display.set_property('resize-guest', False)
             w, h = self.resolution
@@ -3069,6 +3100,10 @@ class Console(Gtk.Window):
         self.main = None
         self.guest_size = None
         self.cursor_channel = self.cursor_fix = None
+        self.capped = None
+        if self.resize_timer:
+            GLib.source_remove(self.resize_timer)
+            self.resize_timer = None
         if self.display:
             self.stack.remove(self.display)
             self.display.destroy()
