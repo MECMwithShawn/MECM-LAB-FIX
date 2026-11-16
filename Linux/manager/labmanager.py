@@ -49,6 +49,7 @@ import libvirt_qemu  # noqa: E402
 
 URI = 'qemu:///system'
 APP_ID = 'io.github.mecmwithshawn.LabManager'
+APP_ICON = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'lab-manager.svg')
 ACCENT = (0.376, 0.804, 1.0)  # #60CDFF, the Windows 11 dark-mode accent
 
 # name: (kind, role, addresses)
@@ -277,7 +278,6 @@ button.link:hover { color: #99ebff; }
 /* Native shell: identity, navigation and lab actions have distinct places. */
 .app-title { font-size: 14px; font-weight: 600; color: #e9eff7; }
 .app-subtitle { font-size: 11px; color: #a1b1c4; }
-.app-mark { color: #59c9ef; padding: 6px; background-color: #183244; border-radius: 7px; }
 .app-toolbar { background-color: #131c28; border-bottom: 1px solid #283648; padding: 8px 20px; }
 .view-tabs { background-color: #0c121b; border-radius: 7px; padding: 3px; }
 .view-tabs button { background: none; border: none; box-shadow: none; border-radius: 5px;
@@ -2688,7 +2688,6 @@ class Console(Gtk.Window):
         self.app, self.dom, self.name = app, dom, dom.name()
         self.get_style_context().add_class('lab-console')
         self.set_default_size(1280, 800)
-        self.set_icon_name('computer')
         self.session = self.display = self.main = None
         self.qxl = False          # live graphics model can change mode (QXL); others ignore requests
         self.guest_size = None    # the guest's current screen size, from the display channel
@@ -4193,15 +4192,15 @@ class LabManager:
         win = Gtk.Window(title='Lab Manager')
         win.get_style_context().add_class('lab')
         win.set_default_size(940, 780)
-        win.set_icon_name('computer')
         hb = Gtk.HeaderBar(show_close_button=True, title='Lab Manager', subtitle='corp.contoso.com')
         self.header = hb
         # Keep the HeaderBar's subtitle property for the existing progress/status
         # updates, while presenting its identity at the left of the native chrome.
         hb.set_custom_title(Gtk.Box())
         brand = Gtk.Box(spacing=10, valign=Gtk.Align.CENTER)
-        mark = Gtk.Image.new_from_icon_name('network-server-symbolic', Gtk.IconSize.LARGE_TOOLBAR)
-        styled(mark, 'app-mark')
+        icon = Gio.FileIcon.new(Gio.File.new_for_path(APP_ICON))
+        mark = Gtk.Image.new_from_gicon(icon, Gtk.IconSize.LARGE_TOOLBAR)
+        mark.set_pixel_size(34)
         brand.pack_start(mark, False, False, 0)
         identity = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         identity.pack_start(styled(Gtk.Label(label='Lab Manager', xalign=0), 'app-title'), False, False, 0)
@@ -4606,6 +4605,7 @@ class LabManager:
 def main():
     GLib.set_prgname('lab-manager')
     GLib.set_application_name('Lab Manager')
+    Gtk.Window.set_default_icon_from_file(APP_ICON)
     settings = Gtk.Settings.get_default()
     settings.set_property('gtk-application-prefer-dark-theme', True)
     provider = Gtk.CssProvider()
