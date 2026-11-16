@@ -1360,6 +1360,9 @@ class Timeline(Gtk.DrawingArea):
             self.hover_x = x
             self.queue_draw()
 
+    def window_samples(self):
+        return min(self.view.HIST, self.minutes * 60 // self.view.HIST_STEP)
+
     def series(self):
         """(VM layers, host/other series, kind), containing only recorded raw samples.
 
@@ -1367,7 +1370,7 @@ class Timeline(Gtk.DrawingArea):
         and bucket maxima combined I/O peaks from different timestamps.
         """
         v = self.view
-        requested = v.HIST if self.minutes == 15 else v.HIST // 3
+        requested = self.window_samples()
         count = min(requested, max(0, v.samples), len(v.hhist['host']))
         stamps = list(getattr(v, 'sample_times', []))
         if stamps:
@@ -3388,8 +3391,15 @@ class ResourceView(Gtk.ScrolledWindow):
         controls = Gtk.Box(spacing=8)
         controls.pack_start(seg_control((('cpu', 'CPU'), ('mem', 'Memory'), ('disk', 'Disk'), ('net', 'Network')),
                                         'cpu', self._set_mode), False, False, 0)
-        controls.pack_start(seg_control(((5, '5 min'), (15, '15 min')), 5, self._set_range), False, False, 0)
-        row, _ = section_title('Activity')
+        controls.pack_start(seg_control(((1, '1 min'), (5, '5 min'), (15, '15 min')), 5, self._set_range),
+                            False, False, 0)
+        self.activity_freshness = styled(Gtk.Label(valign=Gtk.Align.CENTER), 'resource-fact-note')
+        self.activity_freshness.set_tooltip_text('Time since the latest Activity sample. '
+                                                f'Data is stale after {3 * self.HIST_STEP} seconds.')
+        self._freshness_timer = None
+        self.activity_freshness.connect('map', self._start_freshness_timer)
+        self.activity_freshness.connect('unmap', self._stop_freshness_timer)
+        row, _ = section_title('Activity', extra=self.activity_freshness)
         row.pack_end(controls, False, False, 0)
         body.pack_start(row, False, False, 0)
         card = styled(Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8), 'card', 'res', 'resource-activity')
@@ -3639,7 +3649,29 @@ class ResourceView(Gtk.ScrolledWindow):
 
     def _set_range(self, minutes):
         self.timeline.minutes = minutes
+        self.timeline.ymax_shown = None  # old peaks should not set the new window's scale
         self.render_activity()
+
+    def _start_freshness_timer(self, _label):
+        self._update_activity_freshness()
+        self._freshness_timer = GLib.timeout_add(1000, self._update_activity_freshness)
+
+    def _stop_freshness_timer(self, _label):
+        if self._freshness_timer is not None:
+            GLib.source_remove(self._freshness_timer)
+            self._freshness_timer = None
+
+    def _update_activity_freshness(self):
+        age = max(0, int(time.monotonic() - self.sample_times[-1])) if self.sample_times else None
+        stale = age is not None and age >= 3 * self.HIST_STEP
+        if age is None:
+            text = 'Waiting for samples'
+        else:
+            relative = timeline_age(age) if age else 'just now'
+            text = f'Stale · updated {relative}' if stale else f'Updated {relative}'
+        set_text(self.activity_freshness, text)
+        set_classes(self.activity_freshness, {'warn'} if stale else set(), ('warn',))
+        return True
 
     # -- history helpers (used by Timeline) ---------------------------------
     def window(self, dq, n, agg='mean'):
@@ -3968,9 +4000,10 @@ class ResourceView(Gtk.ScrolledWindow):
         set_text(self.insight_cap, f'{n_bad} need{"s" if n_bad == 1 else ""} attention' if n_bad else 'Resource details')
 
     def render_activity(self):
+        self._update_activity_freshness()
+        self.timeline.queue_draw()
         if not self.host:
             return
-        self.timeline.queue_draw()
         mode = self.timeline.mode
         for name, (b, lbl) in self.legend_chips.items():
             if name == 'Total':
@@ -3999,7 +4032,7 @@ class ResourceView(Gtk.ScrolledWindow):
                 set_text(lbl, f'Other host  {v:.1f}%' if mode == 'cpu' else f'Linux & apps  {fmt_bytes(v)}')
                 b.set_tooltip_text('Host usage remaining after the tracked VMs, shown as a separate cyan trace.')
                 continue
-            shown = self.ever_ran(name, self.HIST if self.timeline.minutes == 15 else self.HIST // 3)
+            shown = self.ever_ran(name, self.timeline.window_samples())
             b.set_visible(shown)
             b.get_parent().set_visible(shown)
             h = self.hist[name]

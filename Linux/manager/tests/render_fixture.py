@@ -303,6 +303,22 @@ def main():
     app.resources.timeline._hover(app.resources.timeline.get_allocated_width() * .74)
     screenshot(m, app, args.output / 'resources-hover.png')
     app.resources.timeline._hover(None)
+    select_chart_control(m, app.resources, '1 min')
+    screenshot(m, app, args.output / 'resources-1min.png')
+    assert app.resources.timeline.minutes == 1
+    freshness = app.resources.activity_freshness
+    assert freshness.get_text().startswith('Updated ')
+    # With collection and animations disabled, the timer alone must flag a stall.
+    view = app.resources
+    view.sample_times[-1] = time.monotonic() - 4 * view.HIST_STEP
+    deadline = time.monotonic() + 2
+    while not freshness.get_text().startswith('Stale') and time.monotonic() < deadline:
+        pump(m)
+    assert freshness.get_text().startswith('Stale · updated ')
+    assert freshness.get_style_context().has_class('warn')
+    seed(m, app)
+    assert freshness.get_text().startswith('Updated ')
+    assert not freshness.get_style_context().has_class('warn')
     select_chart_control(m, app.resources, '15 min')
     screenshot(m, app, args.output / 'resources-15min.png')
     select_chart_control(m, app.resources, '5 min')
@@ -310,6 +326,7 @@ def main():
     screenshot(m, app, args.output / 'resources-startup.png')
     seed(m, app, samples=0)
     screenshot(m, app, args.output / 'resources-empty.png')
+    assert freshness.get_text() == 'Waiting for samples'
     seed(m, app, samples=1)
     screenshot(m, app, args.output / 'resources-one-sample.png')
     seed(m, app)
