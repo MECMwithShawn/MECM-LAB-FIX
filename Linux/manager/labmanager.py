@@ -2788,6 +2788,7 @@ class Console(Gtk.Window):
         self.max_pixels = None    # largest mode the QXL framebuffer can hold (vgamem at 32 bpp)
         self.capped = None        # Auto: the mode we asked for because the window is too big for it
         self.resize_timer = None
+        self.mode_stale = False   # new display or full screen toggled: the guest's mode needs choosing again
         self.auto_connect = True  # off after we lose a connection, so two viewers don't keep kicking each other
         self.is_fullscreen = False
         self.resolution = load_settings().get('resolution', {}).get(self.name)  # None = Auto, else [w, h]
@@ -2934,6 +2935,7 @@ class Console(Gtk.Window):
         self.display.set_property('grab-keyboard', True)
         self.display.set_property('grab-mouse', False)
         self.display.connect('size-allocate', self.on_display_resized)
+        self.mode_stale = True  # the agent is often ready before the display: apply the size once laid out
         self.display.show()
         self.stack.add_named(self.display, 'display')
         self.stack.set_visible_child_name('display')
@@ -3034,6 +3036,11 @@ class Console(Gtk.Window):
         self.update_res_button()
         self.apply_resolution()
 
+    def wanted(self):
+        """The size to ask the guest for: None = follow the window. Full screen always follows the
+        screen; a fixed size only applies to the window, and comes back on leaving full screen."""
+        return None if self.is_fullscreen else self.resolution
+
     def capped_size(self):
         """Auto: the window's shape at the largest mode the guest can show, or None if the window
         fits. Windows refuses bigger modes outright and stays at its old one, letterboxed."""
@@ -3052,7 +3059,7 @@ class Console(Gtk.Window):
 
     def check_cap(self):
         self.resize_timer = None
-        if self.display and self.resolution is None and self.capped_size() != self.capped:
+        if self.display and (self.mode_stale or (self.wanted() is None and self.capped_size() != self.capped)):
             self.apply_resolution()
         return False
 
@@ -3062,14 +3069,16 @@ class Console(Gtk.Window):
         to fit it, like Hyper-V's console."""
         if not (self.display and self.qxl and self.agent_ready()):
             return
-        self.capped = self.capped_size() if self.resolution is None else None
-        if self.resolution is None:
+        self.mode_stale = False
+        wanted = self.wanted()
+        self.capped = self.capped_size() if wanted is None else None
+        if wanted is None:
             self.display.set_property('resize-guest', self.capped is None)
             alloc = self.display.get_allocation()
             w, h = self.capped or (alloc.width, alloc.height)
         else:
             self.display.set_property('resize-guest', False)
-            w, h = self.resolution
+            w, h = wanted
             self.fit_window(w, h)
             GLib.timeout_add_seconds(6, self.check_mode, (w, h))
         self.main.update_display_enabled(0, True, False)
@@ -3090,7 +3099,7 @@ class Console(Gtk.Window):
         self.resize(int(w * scale), int(h * scale) + header)
 
     def check_mode(self, wanted):
-        if self.display and self.resolution == list(wanted) and self.guest_size != wanted:
+        if self.display and self.wanted() == list(wanted) and self.guest_size != wanted:
             got = '{}×{}'.format(*self.guest_size) if self.guest_size else 'its old size'
             self.toast.show(f"Windows stayed at {got} instead of {wanted[0]}×{wanted[1]}. It may not offer that "
                             'mode yet; try another size, or sign in and try again.', 8)
@@ -3136,7 +3145,13 @@ class Console(Gtk.Window):
             self.fullscreen()
 
     def on_window_state(self, _w, event):
+        was = self.is_fullscreen
         self.is_fullscreen = bool(event.new_window_state & Gdk.WindowState.FULLSCREEN)
+        if was != self.is_fullscreen and self.resolution is not None:
+            # A fixed size is for the window: full screen fits the guest to the screen instead of
+            # stretching it, and the fixed size returns afterwards. Wait for the new layout first.
+            self.mode_stale = True
+            self.on_display_resized()
         set_icon(self.fs_btn, 'view-restore-symbolic' if self.is_fullscreen else 'view-fullscreen-symbolic')
         if not self.is_fullscreen:
             self.fs_rev.set_reveal_child(False)
