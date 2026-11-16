@@ -23,6 +23,7 @@ Run: python3 labmanager.py            (or: labmanager.py --console HYD-DC1)
 Needs: python3-gi, gir1.2-spiceclientgtk-3.0, python3-libvirt (all pulled in by virt-manager),
 qemu-utils for checkpoints, and membership of the libvirt group.
 """
+import ctypes
 import json
 import math
 import os
@@ -2681,6 +2682,97 @@ class CheckpointDialog(Gtk.Dialog):
         self.destroy()
 
 
+def cursor_fits(width, height, scale_factor):
+    """GDK on Wayland can only show a cursor image whose pixel size is a whole multiple of the
+    window's scale factor."""
+    return width % scale_factor == 0 and height % scale_factor == 0
+
+
+def padded_cursor_surface(pixbuf, zoom, scale_factor):
+    """The guest cursor drawn at `zoom`, on a surface padded with transparent pixels up to the
+    next multiple of `scale_factor` in each direction."""
+    step = max(1, scale_factor)
+    width = max(1, int(zoom * pixbuf.get_width()))
+    height = max(1, int(zoom * pixbuf.get_height()))
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, -(-width // step) * step, -(-height // step) * step)
+    surface.set_device_scale(step, step)
+    cr = cairo.Context(surface)
+    cr.rectangle(0, 0, width / step, height / step)  # keep the padding fully transparent
+    cr.clip()
+    cr.scale(zoom / step, zoom / step)
+    Gdk.cairo_set_source_pixbuf(cr, pixbuf, 0, 0)
+    cr.paint()
+    return surface
+
+
+class CursorFix:
+    """Keeps the guest's mouse pointer drawable on a fractionally scaled Wayland desktop.
+
+    The SPICE widget scales the guest cursor by the same zoom as the picture, which gives sizes
+    such as 85x81. With fractional scaling GTK reports a scale factor of 2, GDK then refuses the
+    odd-sized image ("cursor image size (85x81) not an integer multiple of scale (2)") and the
+    compositor shows a strip of garbage instead. Whenever the widget sets such a cursor, swap in
+    the same image padded to an even size."""
+
+    def __init__(self, display, cursor_channel, guest_size):
+        self.display = display
+        self.channel = cursor_channel
+        self.guest_size = guest_size  # callable -> (w, h) or None
+        self.hidden = False
+        self.ours = None
+        self.pending = False
+        GObject.GObject.connect(cursor_channel, 'cursor-hide', lambda *_: setattr(self, 'hidden', True))
+        GObject.GObject.connect(cursor_channel, 'notify::cursor', lambda *_: setattr(self, 'hidden', False))
+        if display.get_realized():
+            self.on_realize(display)
+        display.connect('realize', self.on_realize)
+
+    def on_realize(self, display):
+        display.get_window().connect('notify::cursor', self.on_window_cursor)
+
+    def on_window_cursor(self, window, _pspec):
+        # Decide after the widget and the channel have finished their own handling.
+        if not self.pending and window.get_cursor() is not self.ours:
+            self.pending = True
+            GLib.idle_add(self.fix, window)
+
+    def zoom(self, scale_factor):
+        """The widget's own picture zoom (spice_display_get_scaling), which it also applies to the cursor."""
+        guest = self.guest_size()
+        if not guest or not guest[0] or not guest[1]:
+            return None
+        width = self.display.get_allocated_width() * scale_factor
+        height = self.display.get_allocated_height() * scale_factor
+        return max(.5, min(width / guest[0], height / guest[1]))
+
+    def fix(self, window):
+        self.pending = False
+        try:
+            if window.is_destroyed() or self.hidden:
+                return False
+            current = window.get_cursor()
+            if current is None or current is self.ours:
+                return False  # server mouse mode, or already replaced
+            shape = self.channel.get_property('cursor')
+            if shape is None or not shape.data or not shape.width or not shape.height:
+                return False
+            scale_factor = self.display.get_scale_factor()
+            zoom = self.zoom(scale_factor)
+            if zoom is None or cursor_fits(int(zoom * shape.width), int(zoom * shape.height), scale_factor):
+                return False  # the widget's own cursor is fine
+            pixels = ctypes.string_at(shape.data, shape.width * shape.height * 4)
+            pixbuf = GdkPixbuf.Pixbuf.new_from_bytes(GLib.Bytes.new(pixels), GdkPixbuf.Colorspace.RGB, True, 8,
+                                                     shape.width, shape.height, shape.width * 4)
+            surface = padded_cursor_surface(pixbuf, zoom, scale_factor)
+            self.ours = Gdk.Cursor.new_from_surface(window.get_display(), surface,
+                                                    int(shape.hot_spot_x * zoom) // scale_factor,
+                                                    int(shape.hot_spot_y * zoom) // scale_factor)
+            window.set_cursor(self.ours)
+        except Exception as e:  # a wrong pointer must never take the console down
+            print(f'cursor fix: {e!r}', file=sys.stderr)
+        return False
+
+
 class Console(Gtk.Window):
     """Slim viewer: header with name + a few actions, SPICE display filling the rest."""
     def __init__(self, app, dom):
@@ -2691,6 +2783,7 @@ class Console(Gtk.Window):
         self.session = self.display = self.main = None
         self.qxl = False          # live graphics model can change mode (QXL); others ignore requests
         self.guest_size = None    # the guest's current screen size, from the display channel
+        self.cursor_channel = self.cursor_fix = None
         self.auto_connect = True  # off after we lose a connection, so two viewers don't keep kicking each other
         self.is_fullscreen = False
         self.resolution = load_settings().get('resolution', {}).get(self.name)  # None = Auto, else [w, h]
@@ -2819,6 +2912,9 @@ class Console(Gtk.Window):
             self.main = channel
             GObject.GObject.connect(channel, 'channel-event', self.on_main_event)
             GObject.GObject.connect(channel, 'notify::agent-connected', lambda *_: GLib.idle_add(self.on_agent))
+        if isinstance(channel, SpiceClientGLib.CursorChannel):
+            self.cursor_channel = channel
+            self.fix_cursor()
         if isinstance(channel, SpiceClientGLib.DisplayChannel) and self.display is None:
             GObject.GObject.connect(channel, 'display-primary-create',
                                     lambda _c, _fmt, w, h, *_rest: setattr(self, 'guest_size', (w, h)))
@@ -2835,6 +2931,12 @@ class Console(Gtk.Window):
         self.stack.add_named(self.display, 'display')
         self.stack.set_visible_child_name('display')
         self.display.grab_focus()
+        self.fix_cursor()
+
+    def fix_cursor(self):
+        """Attach the cursor fix once both the display widget and the cursor channel exist."""
+        if self.display is not None and self.cursor_channel is not None and self.cursor_fix is None:
+            self.cursor_fix = CursorFix(self.display, self.cursor_channel, lambda: self.guest_size)
 
     def on_scale_factor(self, *_):
         """Moving between monitors with different scaling (laptop 150% -> Dell 100%) changes the
@@ -2966,6 +3068,7 @@ class Console(Gtk.Window):
     def close_session(self):
         self.main = None
         self.guest_size = None
+        self.cursor_channel = self.cursor_fix = None
         if self.display:
             self.stack.remove(self.display)
             self.display.destroy()
