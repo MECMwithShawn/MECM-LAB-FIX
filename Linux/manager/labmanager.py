@@ -49,6 +49,7 @@ import libvirt_qemu  # noqa: E402
 
 URI = 'qemu:///system'
 APP_ID = 'io.github.mecmwithshawn.LabManager'
+APP_ICON = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'lab-manager.svg')
 ACCENT = (0.376, 0.804, 1.0)  # #60CDFF, the Windows 11 dark-mode accent
 
 # name: (kind, role, addresses)
@@ -277,7 +278,6 @@ button.link:hover { color: #99ebff; }
 /* Native shell: identity, navigation and lab actions have distinct places. */
 .app-title { font-size: 14px; font-weight: 600; color: #e9eff7; }
 .app-subtitle { font-size: 11px; color: #a1b1c4; }
-.app-mark { color: #59c9ef; padding: 6px; background-color: #183244; border-radius: 7px; }
 .app-toolbar { background-color: #131c28; border-bottom: 1px solid #283648; padding: 8px 20px; }
 .view-tabs { background-color: #0c121b; border-radius: 7px; padding: 3px; }
 .view-tabs button { background: none; border: none; box-shadow: none; border-radius: 5px;
@@ -1360,6 +1360,9 @@ class Timeline(Gtk.DrawingArea):
             self.hover_x = x
             self.queue_draw()
 
+    def window_samples(self):
+        return min(self.view.HIST, self.minutes * 60 // self.view.HIST_STEP)
+
     def series(self):
         """(VM layers, host/other series, kind), containing only recorded raw samples.
 
@@ -1367,7 +1370,7 @@ class Timeline(Gtk.DrawingArea):
         and bucket maxima combined I/O peaks from different timestamps.
         """
         v = self.view
-        requested = v.HIST if self.minutes == 15 else v.HIST // 3
+        requested = self.window_samples()
         count = min(requested, max(0, v.samples), len(v.hhist['host']))
         stamps = list(getattr(v, 'sample_times', []))
         if stamps:
@@ -2685,7 +2688,6 @@ class Console(Gtk.Window):
         self.app, self.dom, self.name = app, dom, dom.name()
         self.get_style_context().add_class('lab-console')
         self.set_default_size(1280, 800)
-        self.set_icon_name('computer')
         self.session = self.display = self.main = None
         self.qxl = False          # live graphics model can change mode (QXL); others ignore requests
         self.guest_size = None    # the guest's current screen size, from the display channel
@@ -3388,8 +3390,15 @@ class ResourceView(Gtk.ScrolledWindow):
         controls = Gtk.Box(spacing=8)
         controls.pack_start(seg_control((('cpu', 'CPU'), ('mem', 'Memory'), ('disk', 'Disk'), ('net', 'Network')),
                                         'cpu', self._set_mode), False, False, 0)
-        controls.pack_start(seg_control(((5, '5 min'), (15, '15 min')), 5, self._set_range), False, False, 0)
-        row, _ = section_title('Activity')
+        controls.pack_start(seg_control(((1, '1 min'), (5, '5 min'), (15, '15 min')), 5, self._set_range),
+                            False, False, 0)
+        self.activity_freshness = styled(Gtk.Label(valign=Gtk.Align.CENTER), 'resource-fact-note')
+        self.activity_freshness.set_tooltip_text('Time since the latest Activity sample. '
+                                                f'Data is stale after {3 * self.HIST_STEP} seconds.')
+        self._freshness_timer = None
+        self.activity_freshness.connect('map', self._start_freshness_timer)
+        self.activity_freshness.connect('unmap', self._stop_freshness_timer)
+        row, _ = section_title('Activity', extra=self.activity_freshness)
         row.pack_end(controls, False, False, 0)
         body.pack_start(row, False, False, 0)
         card = styled(Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8), 'card', 'res', 'resource-activity')
@@ -3639,7 +3648,29 @@ class ResourceView(Gtk.ScrolledWindow):
 
     def _set_range(self, minutes):
         self.timeline.minutes = minutes
+        self.timeline.ymax_shown = None  # old peaks should not set the new window's scale
         self.render_activity()
+
+    def _start_freshness_timer(self, _label):
+        self._update_activity_freshness()
+        self._freshness_timer = GLib.timeout_add(1000, self._update_activity_freshness)
+
+    def _stop_freshness_timer(self, _label):
+        if self._freshness_timer is not None:
+            GLib.source_remove(self._freshness_timer)
+            self._freshness_timer = None
+
+    def _update_activity_freshness(self):
+        age = max(0, int(time.monotonic() - self.sample_times[-1])) if self.sample_times else None
+        stale = age is not None and age >= 3 * self.HIST_STEP
+        if age is None:
+            text = 'Waiting for samples'
+        else:
+            relative = timeline_age(age) if age else 'just now'
+            text = f'Stale · updated {relative}' if stale else f'Updated {relative}'
+        set_text(self.activity_freshness, text)
+        set_classes(self.activity_freshness, {'warn'} if stale else set(), ('warn',))
+        return True
 
     # -- history helpers (used by Timeline) ---------------------------------
     def window(self, dq, n, agg='mean'):
@@ -3968,9 +3999,10 @@ class ResourceView(Gtk.ScrolledWindow):
         set_text(self.insight_cap, f'{n_bad} need{"s" if n_bad == 1 else ""} attention' if n_bad else 'Resource details')
 
     def render_activity(self):
+        self._update_activity_freshness()
+        self.timeline.queue_draw()
         if not self.host:
             return
-        self.timeline.queue_draw()
         mode = self.timeline.mode
         for name, (b, lbl) in self.legend_chips.items():
             if name == 'Total':
@@ -3999,7 +4031,7 @@ class ResourceView(Gtk.ScrolledWindow):
                 set_text(lbl, f'Other host  {v:.1f}%' if mode == 'cpu' else f'Linux & apps  {fmt_bytes(v)}')
                 b.set_tooltip_text('Host usage remaining after the tracked VMs, shown as a separate cyan trace.')
                 continue
-            shown = self.ever_ran(name, self.HIST if self.timeline.minutes == 15 else self.HIST // 3)
+            shown = self.ever_ran(name, self.timeline.window_samples())
             b.set_visible(shown)
             b.get_parent().set_visible(shown)
             h = self.hist[name]
@@ -4160,15 +4192,15 @@ class LabManager:
         win = Gtk.Window(title='Lab Manager')
         win.get_style_context().add_class('lab')
         win.set_default_size(940, 780)
-        win.set_icon_name('computer')
         hb = Gtk.HeaderBar(show_close_button=True, title='Lab Manager', subtitle='corp.contoso.com')
         self.header = hb
         # Keep the HeaderBar's subtitle property for the existing progress/status
         # updates, while presenting its identity at the left of the native chrome.
         hb.set_custom_title(Gtk.Box())
         brand = Gtk.Box(spacing=10, valign=Gtk.Align.CENTER)
-        mark = Gtk.Image.new_from_icon_name('network-server-symbolic', Gtk.IconSize.LARGE_TOOLBAR)
-        styled(mark, 'app-mark')
+        icon = Gio.FileIcon.new(Gio.File.new_for_path(APP_ICON))
+        mark = Gtk.Image.new_from_gicon(icon, Gtk.IconSize.LARGE_TOOLBAR)
+        mark.set_pixel_size(34)
         brand.pack_start(mark, False, False, 0)
         identity = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         identity.pack_start(styled(Gtk.Label(label='Lab Manager', xalign=0), 'app-title'), False, False, 0)
@@ -4573,6 +4605,7 @@ class LabManager:
 def main():
     GLib.set_prgname('lab-manager')
     GLib.set_application_name('Lab Manager')
+    Gtk.Window.set_default_icon_from_file(APP_ICON)
     settings = Gtk.Settings.get_default()
     settings.set_property('gtk-application-prefer-dark-theme', True)
     provider = Gtk.CssProvider()

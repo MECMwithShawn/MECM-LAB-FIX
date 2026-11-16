@@ -150,6 +150,15 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(len(layers[0][2]), 150)
         self.assertEqual(chart._times, list(range(700, 1000, 2)))
 
+    def test_one_minute_keeps_recent_spikes_and_excludes_older_samples(self):
+        chart, view = fixture(450)
+        chart.minutes = 1
+        view.hist['HYD-DC1']['cpu'][419] = 90.0
+        view.hist['HYD-DC1']['cpu'][420] = 83.0
+        layers, _extra, _kind = chart.series()
+        self.assertEqual(chart._times, list(range(940, 1000, 2)))
+        self.assertEqual(layers[0][2], [83.0] + [2.0] * 29)
+
     def test_elapsed_window_excludes_expired_spikes_from_every_aligned_series(self):
         chart, view = fixture(5)
         view.sample_times = deque([2, 4, 6, 608, 610], maxlen=450)
