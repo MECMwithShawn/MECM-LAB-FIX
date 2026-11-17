@@ -20,7 +20,7 @@ All 9 VMs run: DC1, GW1, CM1, CLIENT1–4, and the blank CLIENT5/6 for PXE/OSD.
 | [`vm/`](./vm) | `define-lab.sh` creates the networks and VMs; `make-vms.py` holds the VM specs; `checkpoint.sh` gives Hyper-V-style checkpoints |
 | [`guest/`](./guest) | Scripts that run **inside** Windows, delivered on a CD (`lab-fixup.iso`) built by `build-iso.sh` |
 | [`manager/`](./manager) | **Lab Manager**: a Windows 11-style app to start, stop and connect to the VMs (`install.sh` adds it to the apps menu) |
-| [`memory-guard/`](./memory-guard) | **VM memory guard**: warns when the host runs low on memory and offers to pause or freeze the client VMs, so a full lab plus a big build cannot lock the laptop up (`install.sh` sets up the user service) |
+| [`memory-guard/`](./memory-guard) | **VM memory guard**: pauses a client VM when the host runs low on memory and says so in a notification, so a full lab plus a big build cannot lock the laptop up (`install.sh` sets up the user service) |
 | [`docs/`](./docs) | Lab reference sheet (PNG + editable HTML) |
 | [`tools/`](./tools) | `vmexec.py` runs PowerShell in a VM with no sign-in; `vmtype.py` types into a VM; `shot.sh` screenshots; `peek.sh` reads a VM's offline IP config |
 

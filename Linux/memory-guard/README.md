@@ -1,10 +1,8 @@
 # VM memory guard
 
-A small background service for the Linux lab host. When memory runs low while the client VMs are
-running, it shows a warning window and offers to pause or freeze them. If nobody answers and
-memory is nearly gone, it pauses the client VMs itself so the desktop does not lock up.
-
-![Warning window](docs/warning-window.png)
+A small background service for the Linux lab host. When the laptop is actually short on memory
+while client VMs are running, it pauses one of them and tells you in a notification. If memory
+keeps falling it pauses another, and as a last resort all of them, so the desktop does not lock up.
 
 ## Why
 
@@ -14,27 +12,28 @@ need the power button. The kernel never killed anything to recover.
 
 ## What it does
 
-| Level | When | Action |
-| :--- | :--- | :--- |
-| Warning | Under 6 GB available, or over 4 GB of swap in use | Window with **Pause client VMs**, **Freeze client VMs**, **Ignore 30 min** |
-| Last resort | Under 2 GB available and half the swap used (or no swap) | Pauses the client VMs, then offers **Resume now**, **Freeze instead**, **Keep paused** |
+| When | Action |
+| :--- | :--- |
+| Under 6 GB available | Pauses the client VM holding the most memory |
+| Each further 1 GB drop after that | Pauses the next one |
+| Under 2 GB available and half the swap used (or no swap) | Pauses every running client VM, with an alarm sound |
+| Back above 8 GB available | The episode is over; the next dip starts again with one VM |
 
-- **Pause** stops the VMs instantly and resumes them instantly. They keep their memory, but a
-  paused VM no longer touches it, so the kernel can move it to swap and leave it there.
-- **Freeze** is Lab Manager's *Freeze lab* for the clients only: each VM is saved to disk
-  (`virsh managedsave`) and its memory is freed. *Resume lab* in Lab Manager brings them back.
-- The window marks one of the two as recommended: Pause while swap has room, Freeze once more than
-  a quarter of swap is used or under 4 GB is available.
+- Only available memory counts as low. Swap that is in use while plenty of memory is free does
+  nothing (the first version warned on 4 GB of swap in use, which fired with 19 GB free).
+- Each pause shows one notification that says which VM was paused and why. Its **Resume** button
+  resumes that VM; Lab Manager can resume it too. Nothing asks for a decision first.
+- **Pause** stops a VM instantly and resumes it instantly. It keeps its memory, but a paused VM no
+  longer touches it, so the kernel can move it to swap and leave it there.
 - Only VMs with `client` in the name are touched. DC1, GW1 and CM1 keep running.
-- An alert sound plays on the default output and on the laptop speakers, so it is heard when the
-  default output is a headset nobody is wearing.
+- The guard never resumes a VM by itself.
+- To free a paused VM's memory outright, use *Freeze lab* in Lab Manager.
 
-The lab VMs have no memory balloon device, so they cannot be shrunk while running. Pause and
-freeze are the two levers that exist.
+The lab VMs have no memory balloon device, so they cannot be shrunk while running.
 
 ## Add swap first
 
-The guard works best with swap; without it, Pause frees nothing and the last-resort level is
+The guard works best with swap; without it, a pause frees nothing and the last-resort level is
 reached sooner. A 32 GB swap file on an ext4 root:
 
 ```bash
@@ -55,26 +54,19 @@ No sudo. The user must be in the `libvirt` group, as for Lab Manager.
 
 | File | What it is |
 | :--- | :--- |
-| `vm-memory-guard.py` | The service: thresholds, when to warn, pause / resume / freeze. Thresholds are the constants at the top. |
-| `warning-window.py` | The warning window (GTK 3). Takes one JSON argument, prints the chosen action's key. |
-| `sample-spec.json` | Sample input for working on the window without the service. |
-| `blank.svg` | Transparent icon for the plain progress notifications. |
+| `vm-memory-guard.py` | The service. Thresholds are the constants at the top; `decide()` is the rule. |
+| `tests/test_guard.py` | Checks for the rule. |
 
 ## Try it
 
 ```bash
-python3 warning-window.py "$(cat sample-spec.json)"                   # window only; prints the key, does nothing else
 python3 ~/.local/share/vm-memory-guard/vm-memory-guard.py --status   # current numbers and client VM states
-python3 ~/.local/share/vm-memory-guard/vm-memory-guard.py --test     # the real warning: the buttons act on the VMs
+python3 ~/.local/share/vm-memory-guard/vm-memory-guard.py --test     # shows the notification; pauses nothing
+python3 -B -m unittest discover -s tests                             # the rule
 journalctl --user -u vm-memory-guard                                 # what it has done
 ```
 
 ## Notes
 
-- The window runs under XWayland (`GDK_BACKEND=x11`) because a native Wayland window cannot keep
-  itself above other windows or choose where it opens.
-- Its CSS is loaded at user priority + 1 so a personal `~/.config/gtk-3.0/gtk.css` cannot
-  override the warning colours.
-- **Resume now** resumes every paused client VM, including one paused by hand.
-- Tested: the warning window, Pause, and Resume now. Not yet exercised on a real lab: Freeze from
-  the window, and the automatic pause under real memory pressure.
+- Tested: the rule (unit tests) and the notification. Not yet exercised: a pause under real
+  memory pressure.

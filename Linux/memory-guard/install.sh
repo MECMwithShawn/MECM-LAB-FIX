@@ -15,11 +15,11 @@ if [ "${1:-}" = "--remove" ]; then
 fi
 
 mkdir -p "$dest" "$(dirname "$unit")"
-install -m 755 "$HERE/vm-memory-guard.py" "$HERE/warning-window.py" "$dest/"
-install -m 644 "$HERE/blank.svg" "$dest/"
+install -m 755 "$HERE/vm-memory-guard.py" "$dest/"
+rm -f "$dest/warning-window.py" "$dest/blank.svg"  # from the earlier warning-window version
 cat > "$unit" <<UNIT
 [Unit]
-Description=VM memory guard: warn and pause lab client VMs when memory runs low
+Description=VM memory guard: pause a lab client VM when memory runs low
 PartOf=graphical-session.target
 After=graphical-session.target
 
