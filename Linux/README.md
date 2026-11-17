@@ -275,9 +275,11 @@ that, changing or turning off the share takes effect while the VM runs.
 `python3 Linux/manager/labshare.py status HYD-CM1` shows where a share stands;
 `journalctl --user -u lab-share@HYD-CM1` shows what its service did.
 
-Tested: the service plugging a read-only whole-disk share into a test VM, the definition change,
-WinFsp setup on CM1 through the agent, and the helpers (unit tests). Not yet tested: the drive
-appearing inside Windows, and the unplug before Freeze on a real guest.
+Tested on CLIENT4 (Windows 11) with a one-folder share: the drive appears as `Z:` after the
+power-off and start, read-only refuses writes, switching to read and write applies while the VM
+runs, and unplug, save to disk, resume brings the drive back. A read-only whole-disk share was
+only tested as far as plugging into a VM with no operating system. Not tested: the dialog's
+buttons end to end, and Freeze lab itself (its unplug-and-save step was run by hand).
 
 ### Safe UI checks
 
