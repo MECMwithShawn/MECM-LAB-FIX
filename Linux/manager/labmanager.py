@@ -179,6 +179,8 @@ stackswitcher button { padding: 2px 14px; min-height: 26px; }
 .card.vm.off .facts { opacity: 1; }
 .os-chip { border-radius: 4px; padding: 0 6px; font-size: 11px; color: #b8c6d8; font-feature-settings: "tnum";
     background-color: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.06); }
+.share-icon { color: #5d6f84; }
+.share-icon.on { color: #60cdff; }
 .os-chip.none { color: #869ab1; background-color: rgba(255,255,255,0.03); }
 .mini-cap { font-size: 11px; font-weight: 600; color: #869ab1; }
 .mini-val { font-size: 13px; color: #e9eff7; font-feature-settings: "tnum"; }
@@ -2057,6 +2059,13 @@ class VmRow(Gtk.EventBox):
         line1.pack_start(styled(Gtk.Label(label=short(self.name), xalign=0), 'vm-name'), False, False, 0)
         self.pill = styled(Gtk.Label(valign=Gtk.Align.CENTER), 'pill')
         line1.pack_start(self.pill, False, False, 0)
+        # Host share marker: lit while the share is connected, dim while it is only set up
+        self.share_icon = styled(Gtk.Image.new_from_icon_name('folder-symbolic', Gtk.IconSize.MENU),
+                                 'share-icon')
+        self.share_icon.set_no_show_all(True)
+        self.share_icon.set_valign(Gtk.Align.CENTER)
+        self.share_shown = None
+        line1.pack_start(self.share_icon, False, False, 0)
         ident.pack_start(line1, False, False, 0)
         role_label = styled(Gtk.Label(label=role, xalign=0, max_width_chars=32,
                                       ellipsize=Pango.EllipsizeMode.END), 'vm-role')
@@ -2217,10 +2226,12 @@ class VmRow(Gtk.EventBox):
     def refresh_tools(self):
         """Static facts and the guest-agent state from the live XML (every ~10 s)."""
         try:
-            self.facts = parse_facts(self.dom.XMLDesc(0))
+            xml = self.dom.XMLDesc(0)
+            self.facts = parse_facts(xml)
         except (libvirt.libvirtError, ET.ParseError):
             return
         self.agent = self.facts['agent']
+        self.refresh_share(xml)
         path = self.facts.get('disk')
         if path:
             self.capacity = qcow2_virtual_size(path) or self.capacity
@@ -2232,6 +2243,27 @@ class VmRow(Gtk.EventBox):
             except OSError:
                 pass
         self.saved_img = save_image(self.name) if self.key == 'saved' else None
+
+    def refresh_share(self, xml=None):
+        """Show the host share icon when this VM has a share set; lit once it is connected."""
+        cfg = labshare.load_config(self.name)
+        try:
+            xml = xml or self.dom.XMLDesc(0)
+            on = bool(cfg) and self.dom.isActive() and labshare.has_share(xml)
+            cold = bool(cfg) and self.dom.isActive() and not labshare.has_shared_memory(xml)
+        except (libvirt.libvirtError, ET.ParseError):
+            on = cold = False
+        shown = (labshare.describe(cfg) if cfg else None, on, cold)
+        if shown == self.share_shown:
+            return
+        self.share_shown = shown
+        self.share_icon.set_visible(bool(cfg))
+        if cfg:
+            set_classes(self.share_icon, {'on'} if on else set(), ('on',))
+            state = ('Connected: shows in Windows as the drive "hostshare".' if on else
+                     'Not connected yet: shut the VM down and start it once.' if cold else
+                     'Not connected: appears when the VM is running.')
+            self.share_icon.set_tooltip_text(f'Host share: {shown[0]}\n{state}')
 
     @property
     def capacity_text(self):
@@ -2745,6 +2777,9 @@ class HostShareDialog(Gtk.Dialog):
                 text = f'Host share: {err}' if err else (
                     'Host share is off.' if res == 'off' else SHARE_STATUS.get(res, ''))
                 self.state.set_text(text)  # harmless if the dialog has been closed meanwhile
+                row = getattr(self.app, 'rows', {}).get(name)
+                if row:
+                    row.refresh_share()
                 self.app.toast.show(f"{name.replace('HYD-', '')}: {text}", 7)
             run_bg(work, done)
         self.destroy()

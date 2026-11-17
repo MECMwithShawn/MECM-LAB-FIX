@@ -245,6 +245,9 @@ console. Per VM you choose:
 | What the VM can see | Off, one folder (default `~/LabShare`), your home folder, or the whole disk |
 | What the VM can do | Read and write, or read-only |
 
+A VM with a share shows a folder icon next to its name in the list: blue while the share is
+connected, grey while it is only set up (hover for details).
+
 The share shows in Windows as a drive named `hostshare` (usually `Z:`) and stays on without a
 console window. It is virtiofs, served by `manager/labshare.py` as a user service
 (`lab-share@VM`) that plugs the share into the VM whenever it is running.
