@@ -2863,37 +2863,79 @@ class CheckpointDialog(Gtk.Dialog):
         self.destroy()
 
 
-def cursor_fits(width, height, scale_factor):
-    """GDK on Wayland can only show a cursor image whose pixel size is a whole multiple of the
-    window's scale factor."""
-    return width % scale_factor == 0 and height % scale_factor == 0
+CURSOR_LIMIT = 64  # px; larger cursor images show a strip of garbage on this desktop (see CursorFix)
 
 
-def padded_cursor_surface(pixbuf, zoom, scale_factor):
-    """The guest cursor drawn at `zoom`, on a surface padded with transparent pixels up to the
-    next multiple of `scale_factor` in each direction."""
-    step = max(1, scale_factor)
-    width = max(1, int(zoom * pixbuf.get_width()))
-    height = max(1, int(zoom * pixbuf.get_height()))
-    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, -(-width // step) * step, -(-height // step) * step)
-    surface.set_device_scale(step, step)
+def cursor_shape_fields(shape):
+    """(width, height, hot_x, hot_y) of a SpiceCursorShape.
+
+    PyGObject reads the leading `type` enum as 8 bytes instead of 4, which shifts every field
+    after it by one slot: width and height end up in the top half of `type`, and the fields named
+    width/height really hold the hotspot. Detect that and undo it."""
+    kind = int(shape.type)
+    if kind >> 32:
+        return (kind >> 32) & 0xffff, (kind >> 48) & 0xffff, shape.width, shape.height
+    return shape.width, shape.height, shape.hot_spot_x, shape.hot_spot_y
+
+
+def opaque_bounds(rgba, width, height, hot_x, hot_y):
+    """(x0, y0, x1, y1) of the pixels that are not fully transparent, grown to include the hotspot.
+    Guest cursors carry a wide empty margin (a 17x23 arrow in a 41x39 image)."""
+    hot_x, hot_y = min(max(hot_x, 0), width - 1), min(max(hot_y, 0), height - 1)
+    x0, y0, x1, y1 = hot_x, hot_y, hot_x + 1, hot_y + 1
+    alpha = rgba[3::4]
+    for y in range(height):
+        row = alpha[y * width:(y + 1) * width]
+        left = len(row) - len(row.lstrip(b'\0'))
+        if left == len(row):
+            continue
+        right = len(row.rstrip(b'\0'))
+        x0, x1 = min(x0, left), max(x1, right)
+        y0, y1 = min(y0, y), max(y1, y + 1)
+    return x0, y0, x1, y1
+
+
+def cursor_plan(width, height, zoom, scale_factor, limit=CURSOR_LIMIT):
+    """How to draw a width x height guest cursor so it looks `zoom` times larger on a surface of
+    at most `limit` pixels a side: (device scale, surface width, surface height, pixels per guest
+    pixel). Prefers the window's own scale factor, drops to a lower one (same size on screen, less
+    sharp) when that would not fit, and only shrinks the cursor as a last resort."""
+    logical_w, logical_h = width * zoom / scale_factor, height * zoom / scale_factor
+    for scale in range(max(1, scale_factor), 0, -1):
+        surface_w = -(-math.ceil(logical_w * scale - 1e-6) // scale) * scale
+        surface_h = -(-math.ceil(logical_h * scale - 1e-6) // scale) * scale
+        if max(surface_w, surface_h) <= limit:
+            return scale, max(scale, surface_w), max(scale, surface_h), zoom * scale / scale_factor
+    shrink = limit / max(logical_w, logical_h)
+    return (1, min(limit, max(1, math.ceil(logical_w * shrink - 1e-6))),
+            min(limit, max(1, math.ceil(logical_h * shrink - 1e-6))), zoom / scale_factor * shrink)
+
+
+def cursor_surface(rgba, width, height, hot_x, hot_y, zoom, scale_factor):
+    """A guest cursor (RGBA bytes) as a cairo surface ready for Gdk.Cursor.new_from_surface, with
+    its hotspot in the surface's own units: cropped to the visible pixels, drawn `zoom` times
+    larger and kept within CURSOR_LIMIT pixels."""
+    x0, y0, x1, y1 = opaque_bounds(rgba, width, height, hot_x, hot_y)
+    scale, surface_w, surface_h, per_pixel = cursor_plan(x1 - x0, y1 - y0, zoom, scale_factor)
+    pixbuf = GdkPixbuf.Pixbuf.new_from_bytes(GLib.Bytes.new(rgba), GdkPixbuf.Colorspace.RGB, True, 8,
+                                             width, height, width * 4)
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, surface_w, surface_h)
+    surface.set_device_scale(scale, scale)
     cr = cairo.Context(surface)
-    cr.rectangle(0, 0, width / step, height / step)  # keep the padding fully transparent
-    cr.clip()
-    cr.scale(zoom / step, zoom / step)
-    Gdk.cairo_set_source_pixbuf(cr, pixbuf, 0, 0)
+    cr.scale(per_pixel / scale, per_pixel / scale)
+    Gdk.cairo_set_source_pixbuf(cr, pixbuf, -x0, -y0)
     cr.paint()
-    return surface
+    return surface, ((hot_x - x0) * per_pixel / scale, (hot_y - y0) * per_pixel / scale)
 
 
 class CursorFix:
-    """Keeps the guest's mouse pointer drawable on a fractionally scaled Wayland desktop.
+    """Keeps the guest's mouse pointer clean on a Wayland desktop.
 
-    The SPICE widget scales the guest cursor by the same zoom as the picture, which gives sizes
-    such as 85x81. With fractional scaling GTK reports a scale factor of 2, GDK then refuses the
-    odd-sized image ("cursor image size (85x81) not an integer multiple of scale (2)") and the
-    compositor shows a strip of garbage instead. Whenever the widget sets such a cursor, swap in
-    the same image padded to an even size."""
+    The SPICE widget scales the guest cursor by the same zoom as the picture, margin included, so
+    a 41x39 Windows arrow becomes a 70x67 image. On this desktop (GNOME 46, fractional scaling) any
+    cursor image over 64 pixels a side gets a strip of garbage drawn under it; 64 and below are
+    clean, whatever the content, scale or hotspot. So whenever the widget sets its cursor, replace
+    it with the same pointer cropped to its visible pixels and kept within 64 pixels."""
 
     def __init__(self, display, cursor_channel, guest_size):
         self.display = display
@@ -2901,6 +2943,7 @@ class CursorFix:
         self.guest_size = guest_size  # callable -> (w, h) or None
         self.hidden = False
         self.ours = None
+        self.ours_key = None
         self.pending = False
         GObject.GObject.connect(cursor_channel, 'cursor-hide', lambda *_: setattr(self, 'hidden', True))
         GObject.GObject.connect(cursor_channel, 'notify::cursor', lambda *_: setattr(self, 'hidden', False))
@@ -2926,29 +2969,36 @@ class CursorFix:
         height = self.display.get_allocated_height() * scale_factor
         return max(.5, min(width / guest[0], height / guest[1]))
 
+    def build(self, window, scale_factor, zoom):
+        """Our replacement for the widget's current cursor, or None when there is no shape yet."""
+        shape = self.channel.get_property('cursor')
+        if shape is None or not shape.data:
+            return None
+        width, height, hot_x, hot_y = cursor_shape_fields(shape)
+        if not 0 < width <= 1024 or not 0 < height <= 1024:
+            return None
+        rgba = ctypes.string_at(shape.data, width * height * 4)
+        key = (hash(rgba), width, height, hot_x, hot_y, round(zoom, 3), scale_factor)
+        if key != self.ours_key:
+            surface, hot = cursor_surface(rgba, width, height, hot_x, hot_y, zoom, scale_factor)
+            # GDK keeps the hotspot as whole units, so round rather than let it truncate
+            self.ours = Gdk.Cursor.new_from_surface(window.get_display(), surface, round(hot[0]), round(hot[1]))
+            self.ours_key = key
+        return self.ours
+
     def fix(self, window):
         self.pending = False
         try:
-            if window.is_destroyed() or self.hidden:
+            if window.is_destroyed() or self.hidden or type(window.get_display()).__name__ != 'GdkWaylandDisplay':
                 return False
             current = window.get_cursor()
             if current is None or current is self.ours:
                 return False  # server mouse mode, or already replaced
-            shape = self.channel.get_property('cursor')
-            if shape is None or not shape.data or not shape.width or not shape.height:
-                return False
             scale_factor = self.display.get_scale_factor()
             zoom = self.zoom(scale_factor)
-            if zoom is None or cursor_fits(int(zoom * shape.width), int(zoom * shape.height), scale_factor):
-                return False  # the widget's own cursor is fine
-            pixels = ctypes.string_at(shape.data, shape.width * shape.height * 4)
-            pixbuf = GdkPixbuf.Pixbuf.new_from_bytes(GLib.Bytes.new(pixels), GdkPixbuf.Colorspace.RGB, True, 8,
-                                                     shape.width, shape.height, shape.width * 4)
-            surface = padded_cursor_surface(pixbuf, zoom, scale_factor)
-            self.ours = Gdk.Cursor.new_from_surface(window.get_display(), surface,
-                                                    int(shape.hot_spot_x * zoom) // scale_factor,
-                                                    int(shape.hot_spot_y * zoom) // scale_factor)
-            window.set_cursor(self.ours)
+            cursor = self.build(window, scale_factor, zoom) if zoom else None
+            if cursor is not None:
+                window.set_cursor(cursor)
         except Exception as e:  # a wrong pointer must never take the console down
             print(f'cursor fix: {e!r}', file=sys.stderr)
         return False
