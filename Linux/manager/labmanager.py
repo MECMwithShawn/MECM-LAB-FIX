@@ -48,6 +48,8 @@ import cairo  # noqa: E402
 import libvirt  # noqa: E402
 import libvirt_qemu  # noqa: E402
 
+import labshare  # noqa: E402
+
 URI = 'qemu:///system'
 APP_ID = 'io.github.mecmwithshawn.LabManager'
 APP_ICON = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'lab-manager.svg')
@@ -2599,10 +2601,153 @@ class VmRow(Gtk.EventBox):
         items = self.app.power_items(self.name, self.app.window) + [
             None,
             ('Checkpoints…', self.open_checkpoints, True),
+            ('Host share…', lambda: HostShareDialog(self.app, self.name).run_dialog(), True,
+             labshare.describe(labshare.load_config(self.name))),
             ('Open in virt-manager', lambda: subprocess.Popen(
                 ['virt-manager', '--connect', URI, '--show-domain-console', self.name]), True),
         ]
         popover_menu(self.more, items).popup()
+
+
+def managed_save(dom):
+    """Save a VM's memory to disk. A plugged-in host share blocks that, so it is taken out first;
+    its service plugs it back in when the VM runs again."""
+    name = dom.name()
+    shared = labshare.load_config(name) is not None
+    try:
+        if shared and not labshare.unplug(name):
+            raise RuntimeError(f"Windows in {name.replace('HYD-', '')} did not let go of the host share. "
+                               'Turn Host share off for it, then try again.')
+        dom.managedSave(0)
+    finally:
+        if shared:
+            labshare.release(name)
+
+
+SHARE_STATUS = {
+    'off': '',
+    'stopped': 'The share appears when the VM is running.',
+    'needs-power-off': 'Needs one full power-off: shut the VM down, then start it (a restart inside Windows is '
+                       'not enough). The share appears after that.',
+    'held': 'Paused while the VM is being saved.',
+    'plugged': 'Shared now. In Windows it shows as a drive named hostshare (usually Z:).',
+    'waiting': 'Being connected…',
+    'no-service': 'The share service is not running. Press Apply to start it.',
+}
+
+
+class HostShareDialog(Gtk.Dialog):
+    """Per-VM host share: what part of this computer the VM sees as a drive, and whether it may
+    change it. Like the local resources of a Hyper-V console, but it stays on without a console."""
+    def __init__(self, app, name):
+        super().__init__(title=f"Host share · {name.replace('HYD-', '')}", transient_for=app.window, modal=True)
+        self.app, self.name = app, name
+        self.get_style_context().add_class('lab')
+        self.set_default_size(470, -1)
+        cfg = labshare.load_config(name) or {}
+        box = self.get_content_area()
+        box.set_spacing(8)
+        box.set_border_width(14)
+
+        def heading(text):
+            h = Gtk.Label(label=text, xalign=0)
+            h.get_style_context().add_class('menu-header')
+            box.pack_start(h, False, False, 0)
+
+        def radio(group, label, desc):
+            b = Gtk.RadioButton.new_from_widget(group)
+            inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+            inner.pack_start(Gtk.Label(label=label, xalign=0), False, False, 0)
+            d = Gtk.Label(label=desc, xalign=0, wrap=True, max_width_chars=58)
+            d.get_style_context().add_class('menu-desc')
+            inner.pack_start(d, False, False, 0)
+            b.add(inner)
+            box.pack_start(b, False, False, 0)
+            return b
+
+        heading('What the VM can see')
+        self.scopes = {}
+        first = None
+        for key, label, desc in (
+                (None, 'Off', 'No host files in this VM.'),
+                ('folder', 'One folder', 'Only the folder chosen below. Best for passing files in and out.'),
+                ('home', 'Home folder', 'Everything in your home folder, including saved logins and keys.'),
+                ('disk', 'Whole disk', 'Every file your account can read on this computer.')):
+            first = self.scopes[key] = radio(first, label, desc)
+            self.scopes[key].connect('toggled', self.sync)
+            if key == 'folder':
+                self.folder = Gtk.FileChooserButton(title='Folder to share',
+                                                    action=Gtk.FileChooserAction.SELECT_FOLDER)
+                path = cfg.get('path') or labshare.DEFAULT_FOLDER
+                os.makedirs(path, exist_ok=True)
+                self.folder.set_filename(path)
+                self.folder.set_margin_start(26)
+                box.pack_start(self.folder, False, False, 0)
+
+        heading('What the VM can do')
+        self.rw = radio(None, 'Read and write', 'The VM can add, change and delete files there.')
+        self.ro = radio(self.rw, 'Read-only', 'The VM can only read and copy from it. Windows cannot switch this off.')
+
+        self.scopes[cfg.get('scope')].set_active(True)
+        (self.ro if cfg.get('readonly') else self.rw).set_active(True)
+
+        self.state = Gtk.Label(xalign=0, wrap=True, max_width_chars=60)
+        self.state.get_style_context().add_class('menu-desc')
+        box.pack_start(self.state, False, False, 4)
+        note = Gtk.Label(xalign=0, wrap=True, max_width_chars=60)
+        note.set_text('Programs in the VM get the same access, so share only what the VM should have. Windows '
+                      'needs WinFsp and the VirtIO-FS service for the drive to appear. The share is unplugged '
+                      'while a VM is frozen or saved.')
+        note.get_style_context().add_class('menu-desc')
+        box.pack_start(note, False, False, 0)
+        self.add_button('Close', Gtk.ResponseType.CLOSE)
+        apply_btn = self.add_button('Apply', Gtk.ResponseType.APPLY)
+        apply_btn.get_style_context().add_class('suggested-action')
+        self.sync()
+        self.show_status()
+        self.show_all()
+
+    def chosen(self):
+        scope = next(k for k, b in self.scopes.items() if b.get_active())
+        if scope is None:
+            return None
+        cfg = {'scope': scope, 'readonly': self.ro.get_active()}
+        if scope == 'folder':
+            cfg['path'] = self.folder.get_filename() or labshare.DEFAULT_FOLDER
+        return cfg
+
+    def sync(self, *_):
+        scope = next(k for k, b in self.scopes.items() if b.get_active())
+        self.folder.set_sensitive(scope == 'folder')
+        self.rw.set_sensitive(scope is not None)
+        self.ro.set_sensitive(scope is not None)
+
+    def show_status(self):
+        def work():
+            return labshare.status(self.name)
+
+        def done(res, err):
+            self.state.set_text(str(err) if err else SHARE_STATUS.get(res, ''))
+        run_bg(work, done)
+
+    def run_dialog(self):
+        while self.run() == Gtk.ResponseType.APPLY:
+            cfg = self.chosen()
+            self.state.set_text('Applying…')
+            name = self.name
+
+            def work(cfg=cfg):
+                labshare.apply(name, cfg)
+                time.sleep(4)  # give the service a moment to plug the share in
+                return labshare.status(name)
+
+            def done(res, err):
+                text = f'Host share: {err}' if err else (
+                    'Host share is off.' if res == 'off' else SHARE_STATUS.get(res, ''))
+                self.state.set_text(text)  # harmless if the dialog has been closed meanwhile
+                self.app.toast.show(f"{name.replace('HYD-', '')}: {text}", 7)
+            run_bg(work, done)
+        self.destroy()
 
 
 class CheckpointDialog(Gtk.Dialog):
@@ -4555,7 +4700,7 @@ class LabManager:
 
     def save_vm(self, name, toaster=None):
         dom = self.conn.lookupByName(name)
-        self.act(name, 'Saving state of', lambda: dom.managedSave(0), toaster=toaster)
+        self.act(name, 'Saving state of', lambda: managed_save(dom), toaster=toaster)
 
     def discard_save(self, name, parent, toaster):
         dlg = Gtk.MessageDialog(transient_for=parent, modal=True, message_type=Gtk.MessageType.WARNING,
@@ -4729,7 +4874,7 @@ class LabManager:
                 if n in run['touched']:
                     continue
                 run['status'] = f'Freeze lab: saving {n.replace("HYD-", "")} · {i} of {len(running)}'
-                doms[n].managedSave(0)
+                managed_save(doms[n])
                 done_names.append(n)
             return done_names
 

@@ -235,6 +235,50 @@ takes over, the console shows **Disconnected** with a **Reconnect** button rathe
 Lab Manager runs as a single instance: launching it again brings the open window to the front. Run one VM's
 console directly with `labmanager.py --console HYD-DC1`.
 
+### Host share (a host folder as a drive in a VM)
+
+Each VM's `···` menu has **Host share…**, the counterpart of the local resources of a Hyper-V
+console. Per VM you choose:
+
+| Setting | Choices |
+| :--- | :--- |
+| What the VM can see | Off, one folder (default `~/LabShare`), your home folder, or the whole disk |
+| What the VM can do | Read and write, or read-only |
+
+The share shows in Windows as a drive named `hostshare` (usually `Z:`) and stays on without a
+console window. It is virtiofs, served by `manager/labshare.py` as a user service
+(`lab-share@VM`) that plugs the share into the VM whenever it is running.
+
+- The share server runs as your account in a user namespace, never as root. "Whole disk" means
+  every file your account can read; `/proc`, `/sys`, `/dev`, `/run` and `/tmp` are hidden.
+  Read-only is a read-only mount on the host, so Windows cannot switch it off.
+- Programs in the VM get the same access as you give the VM. Share only what it should have.
+- A VM cannot be saved to disk with a share plugged in, so **Freeze lab** and **Save state**
+  unplug it first; the service plugs it back in when the VM runs again. Saving such a VM with
+  `virsh managedsave` or virt-manager fails until the share is turned off.
+
+One-time setup:
+
+```bash
+# Host, once: let the VMs open the share sockets (AppArmor)
+sudo mkdir -p /etc/apparmor.d/local/abstractions && echo "$HOME/vms/m365-lab/share/*.sock rw," | sudo tee -a /etc/apparmor.d/local/abstractions/libvirt-qemu
+
+# Each Windows VM, once: WinFsp (https://github.com/winfsp/winfsp/releases) plus the VirtIO-FS
+# service set to start with Windows. Runs through the guest agent, no sign-in needed.
+python3 Linux/manager/labshare.py setup-guest HYD-CM1 ~/vms/m365-lab/share/winfsp/winfsp.msi
+```
+
+Each VM also needs **one full power-off** after its share is first turned on (shut down, then
+start): virtiofs needs shared memory backing, which Host share adds to the VM's definition. After
+that, changing or turning off the share takes effect while the VM runs.
+
+`python3 Linux/manager/labshare.py status HYD-CM1` shows where a share stands;
+`journalctl --user -u lab-share@HYD-CM1` shows what its service did.
+
+Tested: the service plugging a read-only whole-disk share into a test VM, the definition change,
+WinFsp setup on CM1 through the agent, and the helpers (unit tests). Not yet tested: the drive
+appearing inside Windows, and the unplug before Freeze on a real guest.
+
 ### Safe UI checks
 
 The UI fixture renders the actual GTK3 widgets with deterministic simulated host and VM data.
