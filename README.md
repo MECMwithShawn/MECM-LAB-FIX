@@ -1,3 +1,5 @@
+> **This repository has moved.** It now lives in the `lab-fix` folder of [MECMwithShawn/MECM](https://github.com/MECMwithShawn/MECM), with its full history. This copy is archived and read-only.
+
 # MECM Lab Fix
 
 Fixes, scripts and notes for running the **Windows 11 and Office 365 Deployment Lab Kit**
